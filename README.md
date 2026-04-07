@@ -1,0 +1,1 @@
+# go-weak-content
