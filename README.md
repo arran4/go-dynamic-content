@@ -19,6 +19,10 @@ go get github.com/arran4/go-weak-content
 
 ## Usage
 
+### Example 1: Lazy Loading with Weak Storage
+
+This is ideal for large datasets where you want the garbage collector to free memory when the content is no longer actively used elsewhere.
+
 ```go
 package main
 
@@ -48,6 +52,54 @@ func main() {
 	}
 
 	fmt.Println(string(*data))
+}
+```
+
+### Example 2: Eager Loading with Memory Storage
+
+If you need the data to be generated immediately and kept firmly in memory, you can use eager loading with memory storage (the default storage is memory storage).
+
+```go
+package main
+
+import (
+	"bytes"
+	"fmt"
+	"io"
+
+	utils "github.com/arran4/go-weak-content"
+)
+
+func main() {
+	fc := utils.NewContent(
+		utils.WithGenerator(func() (io.ReadCloser, error) {
+			// Executed immediately
+			return io.NopCloser(bytes.NewBufferString("Eagerly loaded data!")), nil
+		}),
+		utils.UseMemoryStorage(true),
+		utils.UseEagerLoading(true),
+	)
+
+	fmt.Println(fc.String()) // "Eagerly loaded data!"
+}
+```
+
+### Example 3: Initializing with Static Strings or Bytes
+
+If the content is already available, you can initialize the cache directly.
+
+```go
+package main
+
+import (
+	"fmt"
+
+	utils "github.com/arran4/go-weak-content"
+)
+
+func main() {
+	fc := utils.NewContent(utils.WithString("Pre-existing content"))
+	fmt.Println(fc.String()) // "Pre-existing content"
 }
 ```
 
