@@ -1,6 +1,6 @@
 # go-weak-content
 
-A Go library providing an interface to lazily or eagerly cache generated content. It utilizes Go 1.24's new `weak` package to offer a memory-efficient `WeakBytesStore` alongside a standard `MemoryBytesStore`. This is great for managing ephemeral data, reducing garbage collection pressure, and maintaining efficient caching.
+A Go library providing an interface to lazily or eagerly cache generated content. It utilizes Go 1.24's new `weak` package to offer a memory-efficient `WeakStore` alongside a standard `MemoryStore`. This is great for managing ephemeral data, reducing garbage collection pressure, and maintaining efficient caching.
 
 ## Installation
 
@@ -12,6 +12,7 @@ go get github.com/arran4/go-weak-content
 
 ## Features
 
+- **Generics Support:** Caches any type (`Content[T any]`) effectively.
 - **Weak Pointers:** Leverage Go 1.24 `weak` pointers to automatically free cached memory when it is no longer referenced elsewhere.
 - **Thread-safe Loading:** Implemented safely for concurrent reads/writes using `sync.Mutex`.
 - **Flexible Options:** Highly configurable using functional options.
@@ -27,22 +28,21 @@ This is ideal for large datasets where you want the garbage collector to free me
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 
 	utils "github.com/arran4/go-weak-content"
 )
 
 func main() {
 	// Create a new Content instance that lazily loads, and stores via weak references.
-	fc := utils.NewContent(
-		utils.WithGenerator(func() (io.ReadCloser, error) {
+	fc := utils.NewContent[[]byte](
+		utils.WithGenerator[[]byte](func() (*[]byte, error) {
 			// This will be called on the first Data() call
-			return io.NopCloser(bytes.NewBufferString("Hello from go-weak-content!")), nil
+			b := []byte("Hello from go-weak-content!")
+			return &b, nil
 		}),
-		utils.UseWeakStorage(true),
-		utils.UseLazyLoading(true),
+		utils.UseWeakStorage[[]byte](true),
+		utils.UseLazyLoading[[]byte](true),
 	)
 
 	// Generate and retrieve data
@@ -63,21 +63,20 @@ If you need the data to be generated immediately and kept firmly in memory, you 
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 
 	utils "github.com/arran4/go-weak-content"
 )
 
 func main() {
-	fc := utils.NewContent(
-		utils.WithGenerator(func() (io.ReadCloser, error) {
+	fc := utils.NewContent[string](
+		utils.WithGenerator[string](func() (*string, error) {
 			// Executed immediately
-			return io.NopCloser(bytes.NewBufferString("Eagerly loaded data!")), nil
+			str := "Eagerly loaded data!"
+			return &str, nil
 		}),
-		utils.UseMemoryStorage(true),
-		utils.UseEagerLoading(true),
+		utils.UseMemoryStorage[string](true),
+		utils.UseEagerLoading[string](true),
 	)
 
 	fmt.Println(fc.String()) // "Eagerly loaded data!"
@@ -98,36 +97,35 @@ import (
 )
 
 func main() {
-	fc := utils.NewContent(utils.WithString("Pre-existing content"))
+	fc := utils.NewContent[string](utils.WithValue[string]("Pre-existing content"))
 	fmt.Println(fc.String()) // "Pre-existing content"
 }
 ```
 
 ## Interfaces
 
-### `Content`
+### `Content[T any]`
 The `Content` interface represents the core of the library, providing methods to interact with cached content:
-- **`Data() (*[]byte, error)`**: Returns a pointer to the byte slice containing the generated content. If the content hasn't been generated yet (lazy loading), it will generate it.
+- **`Data() (*T, error)`**: Returns a pointer to the value containing the generated content. If the content hasn't been generated yet (lazy loading), it will generate it.
 - **`Close() error`**: Clears the currently cached data from the underlying store.
-- **`SetGenerator(func() (io.ReadCloser, error))`**: Updates the generator function and clears any currently cached data. If eager loading is enabled, it will immediately generate the content.
-- **`String() string`**: A convenience method that returns the generated content as a string. Suppresses errors and returns an empty string if data generation fails.
+- **`SetGenerator(func() (*T, error))`**: Updates the generator function and clears any currently cached data. If eager loading is enabled, it will immediately generate the content.
+- **`String() string`**: A convenience method that returns the generated content as a string. Suppresses errors and returns an empty string if data generation fails. If the type is `string`, `[]byte`, or `fmt.Stringer`, it will natively format it.
 
 ### Storage Interfaces
-- **`BytesStore`**: The interface defining how bytes are stored and retrieved (`Get()`, `Set()`, `Clear()`).
-- **`WeakBytesStore`**: An implementation of `BytesStore` utilizing Go 1.24 `weak` pointers.
-- **`MemoryBytesStore`**: A standard implementation of `BytesStore` keeping a strong reference in memory.
+- **`Store[T any]`**: The interface defining how objects are stored and retrieved (`Get()`, `Set()`, `Clear()`).
+- **`WeakStore[T any]`**: An implementation of `Store[T any]` utilizing Go 1.24 `weak` pointers.
+- **`MemoryStore[T any]`**: A standard implementation of `Store[T any]` keeping a strong reference in memory.
 
 ## Available Options
 
-The `NewContent(opts ...any)` constructor accepts the following options:
+The `NewContent[T any](opts ...Option[T])` constructor accepts the following options:
 
-- **`UseWeakStorage(bool)`:** Uses a weak pointer (Go 1.24 `weak` package) for storage. The garbage collector may reclaim the cached data if it's not strongly referenced elsewhere.
-- **`UseMemoryStorage(bool)`:** Uses a strong reference for storage, keeping the bytes in memory until explicitly cleared (this is the default behavior).
-- **`UseLazyLoading(bool)`:** Delays the execution of the generator function until `Data()` or `String()` is first called (this is the default behavior).
-- **`UseEagerLoading(bool)`:** Immediately executes the generator function during the `NewContent` call.
-- **`WithGenerator(func() (io.ReadCloser, error))`:** The function that supplies the content when needed.
-- **`WithBytes([]byte)`:** Directly sets the content cache with the provided byte slice.
-- **`WithString(string)`:** Directly sets the content cache with the provided string.
+- **`UseWeakStorage[T](bool)`:** Uses a weak pointer (Go 1.24 `weak` package) for storage. The garbage collector may reclaim the cached data if it's not strongly referenced elsewhere.
+- **`UseMemoryStorage[T](bool)`:** Uses a strong reference for storage, keeping the object in memory until explicitly cleared (this is the default behavior).
+- **`UseLazyLoading[T](bool)`:** Delays the execution of the generator function until `Data()` or `String()` is first called (this is the default behavior).
+- **`UseEagerLoading[T](bool)`:** Immediately executes the generator function during the `NewContent` call.
+- **`WithGenerator[T](func() (*T, error))`:** The function that supplies the content when needed.
+- **`WithValue[T](T)`:** Directly sets the content cache with the provided static value.
 
 ## License
 
