@@ -46,7 +46,7 @@ func TestFileModified(t *testing.T) {
 	}
 
 	// Delete file
-	os.Remove(tempFile)
+	_ = os.Remove(tempFile)
 	if isValid() {
 		t.Error("expected validator to return false after file is deleted")
 	}
