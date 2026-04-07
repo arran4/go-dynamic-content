@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func testFileContentImpl(t *testing.T, fc FileContent, generateCallsPtr *int) {
+func testContentImpl(t *testing.T, fc Content, generateCallsPtr *int) {
 	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
@@ -51,49 +51,49 @@ func testFileContentImpl(t *testing.T, fc FileContent, generateCallsPtr *int) {
 	}
 }
 
-func TestFileContent_LazyWeak(t *testing.T) {
+func TestContent_LazyWeak(t *testing.T) {
 	generateCalls := 0
-	fc := NewFileContent(WithGenerator(func() (io.ReadCloser, error) {
+	fc := NewContent(WithGenerator(func() (io.ReadCloser, error) {
 		generateCalls++
 		return io.NopCloser(bytes.NewBufferString("hello world")), nil
 	}), UseWeakStorage(true), UseLazyLoading(true))
-	testFileContentImpl(t, fc, &generateCalls)
+	testContentImpl(t, fc, &generateCalls)
 }
 
-func TestFileContent_LazyMemory(t *testing.T) {
+func TestContent_LazyMemory(t *testing.T) {
 	generateCalls := 0
-	fc := NewFileContent(WithGenerator(func() (io.ReadCloser, error) {
+	fc := NewContent(WithGenerator(func() (io.ReadCloser, error) {
 		generateCalls++
 		return io.NopCloser(bytes.NewBufferString("hello world")), nil
 	}), UseMemoryStorage(true), UseLazyLoading(true))
-	testFileContentImpl(t, fc, &generateCalls)
+	testContentImpl(t, fc, &generateCalls)
 }
 
-func TestFileContent_EagerWeak(t *testing.T) {
+func TestContent_EagerWeak(t *testing.T) {
 	generateCalls := 0
-	fc := NewFileContent(WithGenerator(func() (io.ReadCloser, error) {
+	fc := NewContent(WithGenerator(func() (io.ReadCloser, error) {
 		generateCalls++
 		return io.NopCloser(bytes.NewBufferString("hello world")), nil
 	}), UseWeakStorage(true), UseEagerLoading(true))
-	testFileContentImpl(t, fc, &generateCalls)
+	testContentImpl(t, fc, &generateCalls)
 }
 
-func TestFileContent_EagerMemory(t *testing.T) {
+func TestContent_EagerMemory(t *testing.T) {
 	generateCalls := 0
-	fc := NewFileContent(WithGenerator(func() (io.ReadCloser, error) {
+	fc := NewContent(WithGenerator(func() (io.ReadCloser, error) {
 		generateCalls++
 		return io.NopCloser(bytes.NewBufferString("hello world")), nil
 	}), UseMemoryStorage(true), UseEagerLoading(true))
-	testFileContentImpl(t, fc, &generateCalls)
+	testContentImpl(t, fc, &generateCalls)
 }
 
-func TestFileContent_WithOptions(t *testing.T) {
-	fc := NewFileContent(WithBytes([]byte("hello bytes")))
+func TestContent_WithOptions(t *testing.T) {
+	fc := NewContent(WithBytes([]byte("hello bytes")))
 	if fc.String() != "hello bytes" {
 		t.Errorf("expected 'hello bytes', got '%s'", fc.String())
 	}
 
-	fc2 := NewFileContent(WithString("hello string"))
+	fc2 := NewContent(WithString("hello string"))
 	if fc2.String() != "hello string" {
 		t.Errorf("expected 'hello string', got '%s'", fc2.String())
 	}
