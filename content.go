@@ -13,6 +13,10 @@ type Content interface {
 	String() string
 	IsValid() bool
 	SetValidator(func() bool)
+	Invalidate()
+	SetOnInvalidated(func())
+	SetOnRefetched(func())
+	SetOnClosed(func())
 }
 
 type BytesStore interface {
@@ -67,19 +71,29 @@ type WithValidator func() bool
 type WithBytes []byte
 type WithString string
 
+type WithOnInvalidated func()
+type WithOnRefetched func()
+type WithOnClosed func()
+
 type contentConfig struct {
-	store    BytesStore
-	lazy     bool
-	generate func() (io.ReadCloser, error)
-	isValid  func() bool
+	store         BytesStore
+	lazy          bool
+	generate      func() (io.ReadCloser, error)
+	isValid       func() bool
+	onInvalidated func()
+	onRefetched   func()
+	onClosed      func()
 }
 
 type defaultContent struct {
-	mu       sync.Mutex
-	store    BytesStore
-	lazy     bool
-	generate func() (io.ReadCloser, error)
-	isValid  func() bool
+	mu            sync.Mutex
+	store         BytesStore
+	lazy          bool
+	generate      func() (io.ReadCloser, error)
+	isValid       func() bool
+	onInvalidated func()
+	onRefetched   func()
+	onClosed      func()
 }
 
 func NewContent(opts ...any) Content {
@@ -110,6 +124,12 @@ func NewContent(opts ...any) Content {
 			cfg.generate = o
 		case WithValidator:
 			cfg.isValid = o
+		case WithOnInvalidated:
+			cfg.onInvalidated = o
+		case WithOnRefetched:
+			cfg.onRefetched = o
+		case WithOnClosed:
+			cfg.onClosed = o
 		case WithBytes:
 			b := []byte(o)
 			cfg.store.Set(&b)
@@ -120,10 +140,13 @@ func NewContent(opts ...any) Content {
 	}
 
 	fc := &defaultContent{
-		store:    cfg.store,
-		lazy:     cfg.lazy,
-		generate: cfg.generate,
-		isValid:  cfg.isValid,
+		store:         cfg.store,
+		lazy:          cfg.lazy,
+		generate:      cfg.generate,
+		isValid:       cfg.isValid,
+		onInvalidated: cfg.onInvalidated,
+		onRefetched:   cfg.onRefetched,
+		onClosed:      cfg.onClosed,
 	}
 
 	if !fc.lazy {
@@ -149,6 +172,9 @@ func (fc *defaultContent) load() (*[]byte, error) {
 	}
 
 	fc.store.Set(&b)
+	if fc.onRefetched != nil {
+		fc.onRefetched()
+	}
 	return &b, nil
 }
 
@@ -157,7 +183,11 @@ func (fc *defaultContent) Data() (*[]byte, error) {
 	defer fc.mu.Unlock()
 
 	if fc.isValid != nil && !fc.isValid() {
+		wasCached := fc.store.Get() != nil
 		fc.store.Clear()
+		if wasCached && fc.onInvalidated != nil {
+			fc.onInvalidated()
+		}
 	}
 
 	if val := fc.store.Get(); val != nil {
@@ -176,6 +206,9 @@ func (fc *defaultContent) Close() error {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 	fc.store.Clear()
+	if fc.onClosed != nil {
+		fc.onClosed()
+	}
 	return nil
 }
 
@@ -194,7 +227,11 @@ func (fc *defaultContent) SetGenerator(generate func() (io.ReadCloser, error)) {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 	fc.generate = generate
+	wasCached := fc.store.Get() != nil
 	fc.store.Clear()
+	if wasCached && fc.onInvalidated != nil {
+		fc.onInvalidated()
+	}
 	if !fc.lazy {
 		_, _ = fc.load()
 	}
@@ -214,4 +251,32 @@ func (fc *defaultContent) SetValidator(isValid func() bool) {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 	fc.isValid = isValid
+}
+
+func (fc *defaultContent) Invalidate() {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	wasCached := fc.store.Get() != nil
+	fc.store.Clear()
+	if wasCached && fc.onInvalidated != nil {
+		fc.onInvalidated()
+	}
+}
+
+func (fc *defaultContent) SetOnInvalidated(onInvalidated func()) {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	fc.onInvalidated = onInvalidated
+}
+
+func (fc *defaultContent) SetOnRefetched(onRefetched func()) {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	fc.onRefetched = onRefetched
+}
+
+func (fc *defaultContent) SetOnClosed(onClosed func()) {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	fc.onClosed = onClosed
 }

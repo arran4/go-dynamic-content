@@ -161,3 +161,93 @@ func TestContent_Validator(t *testing.T) {
 		t.Errorf("expected IsValid() to be false after SetValidator(false)")
 	}
 }
+
+func TestContent_Callbacks(t *testing.T) {
+	invalidationCount := 0
+	refetchCount := 0
+	closeCount := 0
+
+	fc := NewContent(
+		WithGenerator(func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewBufferString("callback data")), nil
+		}),
+		WithOnInvalidated(func() { invalidationCount++ }),
+		WithOnRefetched(func() { refetchCount++ }),
+		WithOnClosed(func() { closeCount++ }),
+	)
+
+	// Fetch data, should trigger refetch
+	_, err := fc.Data()
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+
+	if refetchCount != 1 {
+		t.Errorf("expected 1 refetch, got %d", refetchCount)
+	}
+
+	// Fetch again, should not trigger refetch
+	_, _ = fc.Data()
+	if refetchCount != 1 {
+		t.Errorf("expected 1 refetch, got %d", refetchCount)
+	}
+
+	// Explicit invalidation
+	fc.Invalidate()
+	if invalidationCount != 1 {
+		t.Errorf("expected 1 invalidation, got %d", invalidationCount)
+	}
+
+	// Refetch data
+	_, _ = fc.Data()
+	if refetchCount != 2 {
+		t.Errorf("expected 2 refetches, got %d", refetchCount)
+	}
+
+	// Set new generator, should invalidate old data
+	fc.SetGenerator(func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewBufferString("new callback data")), nil
+	})
+	if invalidationCount != 2 {
+		t.Errorf("expected 2 invalidations, got %d", invalidationCount)
+	}
+
+	// Fetch new data
+	_, _ = fc.Data()
+	if refetchCount != 3 {
+		t.Errorf("expected 3 refetches, got %d", refetchCount)
+	}
+
+	// Validate closing
+	err = fc.Close()
+	if err != nil {
+		t.Errorf("expected no error from Close, got %v", err)
+	}
+	if closeCount != 1 {
+		t.Errorf("expected 1 close call, got %d", closeCount)
+	}
+
+	// Change callbacks via setters
+	newInvalidationCount := 0
+	newRefetchCount := 0
+	newCloseCount := 0
+
+	fc.SetOnInvalidated(func() { newInvalidationCount++ })
+	fc.SetOnRefetched(func() { newRefetchCount++ })
+	fc.SetOnClosed(func() { newCloseCount++ })
+
+	_, _ = fc.Data()
+	if newRefetchCount != 1 {
+		t.Errorf("expected new refetch count 1, got %d", newRefetchCount)
+	}
+
+	fc.Invalidate()
+	if newInvalidationCount != 1 {
+		t.Errorf("expected new invalidation count 1, got %d", newInvalidationCount)
+	}
+
+	_ = fc.Close()
+	if newCloseCount != 1 {
+		t.Errorf("expected new close count 1, got %d", newCloseCount)
+	}
+}
