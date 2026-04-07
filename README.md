@@ -51,6 +51,20 @@ func main() {
 }
 ```
 
+## Interfaces
+
+### `Content`
+The `Content` interface represents the core of the library, providing methods to interact with cached content:
+- **`Data() (*[]byte, error)`**: Returns a pointer to the byte slice containing the generated content. If the content hasn't been generated yet (lazy loading), it will generate it.
+- **`Close() error`**: Clears the currently cached data from the underlying store.
+- **`SetGenerator(func() (io.ReadCloser, error))`**: Updates the generator function and clears any currently cached data. If eager loading is enabled, it will immediately generate the content.
+- **`String() string`**: A convenience method that returns the generated content as a string. Suppresses errors and returns an empty string if data generation fails.
+
+### Storage Interfaces
+- **`BytesStore`**: The interface defining how bytes are stored and retrieved (`Get()`, `Set()`, `Clear()`).
+- **`WeakBytesStore`**: An implementation of `BytesStore` utilizing Go 1.24 `weak` pointers.
+- **`MemoryBytesStore`**: A standard implementation of `BytesStore` keeping a strong reference in memory.
+
 ## Available Options
 
 The `NewContent(opts ...any)` constructor accepts the following options:
