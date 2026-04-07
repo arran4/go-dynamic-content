@@ -98,3 +98,66 @@ func TestContent_WithOptions(t *testing.T) {
 		t.Errorf("expected 'hello string', got '%s'", fc2.String())
 	}
 }
+
+func TestContent_Validator(t *testing.T) {
+	generateCalls := 0
+	valid := true
+
+	fc := NewContent(
+		WithGenerator(func() (io.ReadCloser, error) {
+			generateCalls++
+			return io.NopCloser(bytes.NewBufferString("valid world")), nil
+		}),
+		WithValidator(func() bool {
+			return valid
+		}),
+	)
+
+	if fc.IsValid() {
+		t.Errorf("expected IsValid() to be false initially as cache is empty")
+	}
+
+	b, err := fc.Data()
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+	if string(*b) != "valid world" {
+		t.Errorf("expected 'valid world', got '%s'", string(*b))
+	}
+	if generateCalls != 1 {
+		t.Errorf("expected 1 generate call, got %d", generateCalls)
+	}
+	if !fc.IsValid() {
+		t.Errorf("expected IsValid() to be true after cache is populated")
+	}
+
+	// Should not generate again
+	_, _ = fc.Data()
+	if generateCalls != 1 {
+		t.Errorf("expected still 1 generate call, got %d", generateCalls)
+	}
+
+	// Invalidate cache
+	valid = false
+	if fc.IsValid() {
+		t.Errorf("expected IsValid() to be false after validator changes")
+	}
+
+	// Fetching data should now generate again
+	b, err = fc.Data()
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+	if string(*b) != "valid world" {
+		t.Errorf("expected 'valid world', got '%s'", string(*b))
+	}
+	if generateCalls != 2 {
+		t.Errorf("expected 2 generate calls, got %d", generateCalls)
+	}
+
+	// Test SetValidator
+	fc.SetValidator(func() bool { return false })
+	if fc.IsValid() {
+		t.Errorf("expected IsValid() to be false after SetValidator(false)")
+	}
+}

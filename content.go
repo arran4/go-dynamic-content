@@ -11,6 +11,8 @@ type Content interface {
 	Close() error
 	SetGenerator(func() (io.ReadCloser, error))
 	String() string
+	IsValid() bool
+	SetValidator(func() bool)
 }
 
 type BytesStore interface {
@@ -61,6 +63,7 @@ type UseLazyLoading bool
 type UseEagerLoading bool
 
 type WithGenerator func() (io.ReadCloser, error)
+type WithValidator func() bool
 type WithBytes []byte
 type WithString string
 
@@ -68,6 +71,7 @@ type contentConfig struct {
 	store    BytesStore
 	lazy     bool
 	generate func() (io.ReadCloser, error)
+	isValid  func() bool
 }
 
 type defaultContent struct {
@@ -75,6 +79,7 @@ type defaultContent struct {
 	store    BytesStore
 	lazy     bool
 	generate func() (io.ReadCloser, error)
+	isValid  func() bool
 }
 
 func NewContent(opts ...any) Content {
@@ -103,6 +108,8 @@ func NewContent(opts ...any) Content {
 			}
 		case WithGenerator:
 			cfg.generate = o
+		case WithValidator:
+			cfg.isValid = o
 		case WithBytes:
 			b := []byte(o)
 			cfg.store.Set(&b)
@@ -116,6 +123,7 @@ func NewContent(opts ...any) Content {
 		store:    cfg.store,
 		lazy:     cfg.lazy,
 		generate: cfg.generate,
+		isValid:  cfg.isValid,
 	}
 
 	if !fc.lazy {
@@ -147,6 +155,10 @@ func (fc *defaultContent) load() (*[]byte, error) {
 func (fc *defaultContent) Data() (*[]byte, error) {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
+
+	if fc.isValid != nil && !fc.isValid() {
+		fc.store.Clear()
+	}
 
 	if val := fc.store.Get(); val != nil {
 		return val, nil
@@ -186,4 +198,20 @@ func (fc *defaultContent) SetGenerator(generate func() (io.ReadCloser, error)) {
 	if !fc.lazy {
 		_, _ = fc.load()
 	}
+}
+
+func (fc *defaultContent) IsValid() bool {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+
+	if fc.isValid != nil && !fc.isValid() {
+		return false
+	}
+	return fc.store.Get() != nil
+}
+
+func (fc *defaultContent) SetValidator(isValid func() bool) {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	fc.isValid = isValid
 }
