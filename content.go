@@ -6,7 +6,7 @@ import (
 	"weak"
 )
 
-type FileContent interface {
+type Content interface {
 	Data() (*[]byte, error)
 	Close() error
 	SetGenerator(func() (io.ReadCloser, error))
@@ -64,21 +64,21 @@ type WithGenerator func() (io.ReadCloser, error)
 type WithBytes []byte
 type WithString string
 
-type fileContentConfig struct {
+type contentConfig struct {
 	store    BytesStore
 	lazy     bool
 	generate func() (io.ReadCloser, error)
 }
 
-type defaultFileContent struct {
+type defaultContent struct {
 	mu       sync.Mutex
 	store    BytesStore
 	lazy     bool
 	generate func() (io.ReadCloser, error)
 }
 
-func NewFileContent(opts ...any) FileContent {
-	cfg := fileContentConfig{
+func NewContent(opts ...any) Content {
+	cfg := contentConfig{
 		store: &MemoryBytesStore{},
 		lazy:  true,
 	}
@@ -112,7 +112,7 @@ func NewFileContent(opts ...any) FileContent {
 		}
 	}
 
-	fc := &defaultFileContent{
+	fc := &defaultContent{
 		store:    cfg.store,
 		lazy:     cfg.lazy,
 		generate: cfg.generate,
@@ -125,7 +125,7 @@ func NewFileContent(opts ...any) FileContent {
 	return fc
 }
 
-func (fc *defaultFileContent) load() (*[]byte, error) {
+func (fc *defaultContent) load() (*[]byte, error) {
 	if fc.generate == nil {
 		return nil, nil // No generator provided, return nil or handle gracefully
 	}
@@ -144,7 +144,7 @@ func (fc *defaultFileContent) load() (*[]byte, error) {
 	return &b, nil
 }
 
-func (fc *defaultFileContent) Data() (*[]byte, error) {
+func (fc *defaultContent) Data() (*[]byte, error) {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 
@@ -160,14 +160,14 @@ func (fc *defaultFileContent) Data() (*[]byte, error) {
 	return val, nil
 }
 
-func (fc *defaultFileContent) Close() error {
+func (fc *defaultContent) Close() error {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 	fc.store.Clear()
 	return nil
 }
 
-func (fc *defaultFileContent) String() string {
+func (fc *defaultContent) String() string {
 	b, err := fc.Data()
 	if err != nil {
 		return "" // Suppress error for templates
@@ -178,7 +178,7 @@ func (fc *defaultFileContent) String() string {
 	return string(*b)
 }
 
-func (fc *defaultFileContent) SetGenerator(generate func() (io.ReadCloser, error)) {
+func (fc *defaultContent) SetGenerator(generate func() (io.ReadCloser, error)) {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 	fc.generate = generate

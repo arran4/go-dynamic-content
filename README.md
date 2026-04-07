@@ -31,8 +31,8 @@ import (
 )
 
 func main() {
-	// Create a new FileContent instance that lazily loads, and stores via weak references.
-	fc := utils.NewFileContent(
+	// Create a new Content instance that lazily loads, and stores via weak references.
+	fc := utils.NewContent(
 		utils.WithGenerator(func() (io.ReadCloser, error) {
 			// This will be called on the first Data() call
 			return io.NopCloser(bytes.NewBufferString("Hello from go-weak-content!")), nil
@@ -53,12 +53,12 @@ func main() {
 
 ## Available Options
 
-The `NewFileContent(opts ...any)` constructor accepts the following options:
+The `NewContent(opts ...any)` constructor accepts the following options:
 
 - **`UseWeakStorage(bool)`:** Uses a weak pointer (Go 1.24 `weak` package) for storage. The garbage collector may reclaim the cached data if it's not strongly referenced elsewhere.
 - **`UseMemoryStorage(bool)`:** Uses a strong reference for storage, keeping the bytes in memory until explicitly cleared (this is the default behavior).
 - **`UseLazyLoading(bool)`:** Delays the execution of the generator function until `Data()` or `String()` is first called (this is the default behavior).
-- **`UseEagerLoading(bool)`:** Immediately executes the generator function during the `NewFileContent` call.
+- **`UseEagerLoading(bool)`:** Immediately executes the generator function during the `NewContent` call.
 - **`WithGenerator(func() (io.ReadCloser, error))`:** The function that supplies the content when needed.
 - **`WithBytes([]byte)`:** Directly sets the content cache with the provided byte slice.
 - **`WithString(string)`:** Directly sets the content cache with the provided string.
