@@ -1,57 +1,57 @@
 package utils
 
 import (
-	"io"
+	"fmt"
 	"sync"
 	"weak"
 )
 
-type Content interface {
-	Data() (*[]byte, error)
+type Content[T any] interface {
+	Data() (*T, error)
 	Close() error
-	SetGenerator(func() (io.ReadCloser, error))
+	SetGenerator(func() (*T, error))
 	String() string
 }
 
-type BytesStore interface {
-	Get() *[]byte
-	Set(*[]byte)
+type Store[T any] interface {
+	Get() *T
+	Set(*T)
 	Clear()
 }
 
-type WeakBytesStore struct {
-	ptr weak.Pointer[[]byte]
+type WeakStore[T any] struct {
+	ptr weak.Pointer[T]
 }
 
-func (s *WeakBytesStore) Get() *[]byte {
+func (s *WeakStore[T]) Get() *T {
 	return s.ptr.Value()
 }
 
-func (s *WeakBytesStore) Set(val *[]byte) {
+func (s *WeakStore[T]) Set(val *T) {
 	if val == nil {
-		s.ptr = weak.Pointer[[]byte]{}
+		s.ptr = weak.Pointer[T]{}
 	} else {
 		s.ptr = weak.Make(val)
 	}
 }
 
-func (s *WeakBytesStore) Clear() {
-	s.ptr = weak.Pointer[[]byte]{}
+func (s *WeakStore[T]) Clear() {
+	s.ptr = weak.Pointer[T]{}
 }
 
-type MemoryBytesStore struct {
-	val *[]byte
+type MemoryStore[T any] struct {
+	val *T
 }
 
-func (s *MemoryBytesStore) Get() *[]byte {
+func (s *MemoryStore[T]) Get() *T {
 	return s.val
 }
 
-func (s *MemoryBytesStore) Set(val *[]byte) {
+func (s *MemoryStore[T]) Set(val *T) {
 	s.val = val
 }
 
-func (s *MemoryBytesStore) Clear() {
+func (s *MemoryStore[T]) Clear() {
 	s.val = nil
 }
 
@@ -60,26 +60,29 @@ type UseMemoryStorage bool
 type UseLazyLoading bool
 type UseEagerLoading bool
 
-type WithGenerator func() (io.ReadCloser, error)
-type WithBytes []byte
-type WithString string
+type WithGenerator[T any] func() (*T, error)
+type WithValue[T any] struct { val T }
 
-type contentConfig struct {
-	store    BytesStore
-	lazy     bool
-	generate func() (io.ReadCloser, error)
+func NewWithValue[T any](val T) WithValue[T] {
+	return WithValue[T]{val: val}
 }
 
-type defaultContent struct {
+type contentConfig[T any] struct {
+	store    Store[T]
+	lazy     bool
+	generate func() (*T, error)
+}
+
+type defaultContent[T any] struct {
 	mu       sync.Mutex
-	store    BytesStore
+	store    Store[T]
 	lazy     bool
-	generate func() (io.ReadCloser, error)
+	generate func() (*T, error)
 }
 
-func NewContent(opts ...any) Content {
-	cfg := contentConfig{
-		store: &MemoryBytesStore{},
+func NewContent[T any](opts ...any) Content[T] {
+	cfg := contentConfig[T]{
+		store: &MemoryStore[T]{},
 		lazy:  true,
 	}
 
@@ -87,11 +90,11 @@ func NewContent(opts ...any) Content {
 		switch o := opt.(type) {
 		case UseWeakStorage:
 			if o {
-				cfg.store = &WeakBytesStore{}
+				cfg.store = &WeakStore[T]{}
 			}
 		case UseMemoryStorage:
 			if o {
-				cfg.store = &MemoryBytesStore{}
+				cfg.store = &MemoryStore[T]{}
 			}
 		case UseLazyLoading:
 			if o {
@@ -101,18 +104,15 @@ func NewContent(opts ...any) Content {
 			if o {
 				cfg.lazy = false
 			}
-		case WithGenerator:
+		case WithGenerator[T]:
 			cfg.generate = o
-		case WithBytes:
-			b := []byte(o)
-			cfg.store.Set(&b)
-		case WithString:
-			b := []byte(o)
-			cfg.store.Set(&b)
+		case WithValue[T]:
+			val := o.val
+			cfg.store.Set(&val)
 		}
 	}
 
-	fc := &defaultContent{
+	fc := &defaultContent[T]{
 		store:    cfg.store,
 		lazy:     cfg.lazy,
 		generate: cfg.generate,
@@ -125,26 +125,20 @@ func NewContent(opts ...any) Content {
 	return fc
 }
 
-func (fc *defaultContent) load() (*[]byte, error) {
+func (fc *defaultContent[T]) load() (*T, error) {
 	if fc.generate == nil {
 		return nil, nil // No generator provided, return nil or handle gracefully
 	}
-	rc, err := fc.generate()
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = rc.Close() }()
-
-	b, err := io.ReadAll(rc)
+	val, err := fc.generate()
 	if err != nil {
 		return nil, err
 	}
 
-	fc.store.Set(&b)
-	return &b, nil
+	fc.store.Set(val)
+	return val, nil
 }
 
-func (fc *defaultContent) Data() (*[]byte, error) {
+func (fc *defaultContent[T]) Data() (*T, error) {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 
@@ -160,25 +154,29 @@ func (fc *defaultContent) Data() (*[]byte, error) {
 	return val, nil
 }
 
-func (fc *defaultContent) Close() error {
+func (fc *defaultContent[T]) Close() error {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 	fc.store.Clear()
 	return nil
 }
 
-func (fc *defaultContent) String() string {
-	b, err := fc.Data()
-	if err != nil {
+func (fc *defaultContent[T]) String() string {
+	val, err := fc.Data()
+	if err != nil || val == nil {
 		return "" // Suppress error for templates
 	}
-	if b == nil {
-		return ""
+
+	if s, ok := any(*val).(string); ok {
+		return s
 	}
-	return string(*b)
+	if b, ok := any(*val).([]byte); ok {
+		return string(b)
+	}
+	return fmt.Sprintf("%v", *val)
 }
 
-func (fc *defaultContent) SetGenerator(generate func() (io.ReadCloser, error)) {
+func (fc *defaultContent[T]) SetGenerator(generate func() (*T, error)) {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 	fc.generate = generate
