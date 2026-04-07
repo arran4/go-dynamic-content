@@ -165,3 +165,97 @@ func TestContent_Validator(t *testing.T) {
 		t.Errorf("expected IsValid() to be false after SetValidator(false)")
 	}
 }
+
+func TestContent_HasContentAndInvalidate(t *testing.T) {
+	fc := NewContent[[]byte](
+		WithGenerator[[]byte](func() (*[]byte, error) {
+			b := []byte("content")
+			return &b, nil
+		}),
+	)
+
+	if fc.HasContent() {
+		t.Errorf("expected HasContent() to be false initially")
+	}
+
+	_, _ = fc.Data()
+	if !fc.HasContent() {
+		t.Errorf("expected HasContent() to be true after data generation")
+	}
+
+	fc.Invalidate()
+	if fc.HasContent() {
+		t.Errorf("expected HasContent() to be false after invalidation")
+	}
+}
+
+func TestContent_WithInvalidator(t *testing.T) {
+	var triggerInvalidate func()
+
+	fc := NewContent[[]byte](
+		WithGenerator[[]byte](func() (*[]byte, error) {
+			b := []byte("content")
+			return &b, nil
+		}),
+		WithInvalidator[[]byte](func(invalidate func()) {
+			triggerInvalidate = invalidate
+		}),
+	)
+
+	_, _ = fc.Data()
+	if !fc.HasContent() {
+		t.Errorf("expected HasContent() to be true")
+	}
+
+	if triggerInvalidate == nil {
+		t.Fatalf("expected triggerInvalidate to be set")
+	}
+
+	triggerInvalidate()
+	if fc.HasContent() {
+		t.Errorf("expected HasContent() to be false after using invalidator trigger")
+	}
+}
+
+func TestContent_Callbacks(t *testing.T) {
+	generateCalls := 0
+	invalidateCalls := 0
+	closeCalls := 0
+
+	fc := NewContent[[]byte](
+		WithGenerator[[]byte](func() (*[]byte, error) {
+			b := []byte("content")
+			return &b, nil
+		}),
+		WithOnGenerate[[]byte](func(val *[]byte, err error) {
+			generateCalls++
+		}),
+		WithOnInvalidate[[]byte](func() {
+			invalidateCalls++
+		}),
+		WithOnClose[[]byte](func() {
+			closeCalls++
+		}),
+	)
+
+	_, _ = fc.Data()
+	if generateCalls != 1 {
+		t.Errorf("expected 1 generate call, got %d", generateCalls)
+	}
+
+	fc.Invalidate()
+	if invalidateCalls != 1 {
+		t.Errorf("expected 1 invalidate call, got %d", invalidateCalls)
+	}
+
+	// Should not trigger again if already empty
+	fc.Invalidate()
+	if invalidateCalls != 1 {
+		t.Errorf("expected invalidate call count to remain 1, got %d", invalidateCalls)
+	}
+
+	_ = fc.Close()
+	if closeCalls != 1 {
+		t.Errorf("expected 1 close call, got %d", closeCalls)
+	}
+}

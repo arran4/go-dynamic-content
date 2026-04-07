@@ -13,6 +13,8 @@ type Content[T any] interface {
 	String() string
 	IsValid() bool
 	SetValidator(func() bool)
+	HasContent() bool
+	Invalidate()
 }
 
 type Store[T any] interface {
@@ -109,19 +111,50 @@ func WithValue[T any](val T) Option[T] {
 	}
 }
 
+func WithInvalidator[T any](setup func(invalidate func())) Option[T] {
+	return func(cfg *contentConfig[T]) {
+		cfg.invalidatorSetup = setup
+	}
+}
+
+func WithOnGenerate[T any](cb func(val *T, err error)) Option[T] {
+	return func(cfg *contentConfig[T]) {
+		cfg.onGenerate = cb
+	}
+}
+
+func WithOnInvalidate[T any](cb func()) Option[T] {
+	return func(cfg *contentConfig[T]) {
+		cfg.onInvalidate = cb
+	}
+}
+
+func WithOnClose[T any](cb func()) Option[T] {
+	return func(cfg *contentConfig[T]) {
+		cfg.onClose = cb
+	}
+}
+
 type contentConfig[T any] struct {
-	store    Store[T]
-	lazy     bool
-	generate func() (*T, error)
-	isValid  func() bool
+	store            Store[T]
+	lazy             bool
+	generate         func() (*T, error)
+	isValid          func() bool
+	invalidatorSetup func(invalidate func())
+	onGenerate       func(val *T, err error)
+	onInvalidate     func()
+	onClose          func()
 }
 
 type defaultContent[T any] struct {
-	mu       sync.Mutex
-	store    Store[T]
-	lazy     bool
-	generate func() (*T, error)
-	isValid  func() bool
+	mu           sync.Mutex
+	store        Store[T]
+	lazy         bool
+	generate     func() (*T, error)
+	isValid      func() bool
+	onGenerate   func(val *T, err error)
+	onInvalidate func()
+	onClose      func()
 }
 
 func NewContent[T any](opts ...Option[T]) Content[T] {
@@ -135,10 +168,17 @@ func NewContent[T any](opts ...Option[T]) Content[T] {
 	}
 
 	fc := &defaultContent[T]{
-		store:    cfg.store,
-		lazy:     cfg.lazy,
-		generate: cfg.generate,
-		isValid:  cfg.isValid,
+		store:        cfg.store,
+		lazy:         cfg.lazy,
+		generate:     cfg.generate,
+		isValid:      cfg.isValid,
+		onGenerate:   cfg.onGenerate,
+		onInvalidate: cfg.onInvalidate,
+		onClose:      cfg.onClose,
+	}
+
+	if cfg.invalidatorSetup != nil {
+		cfg.invalidatorSetup(fc.Invalidate)
 	}
 
 	if !fc.lazy {
@@ -153,6 +193,11 @@ func (fc *defaultContent[T]) load() (*T, error) {
 		return nil, nil // No generator provided, return nil or handle gracefully
 	}
 	val, err := fc.generate()
+
+	if fc.onGenerate != nil {
+		fc.onGenerate(val, err)
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +213,12 @@ func (fc *defaultContent[T]) Data() (*T, error) {
 	defer fc.mu.Unlock()
 
 	if fc.isValid != nil && !fc.isValid() {
-		fc.store.Clear()
+		if fc.store.Get() != nil {
+			fc.store.Clear()
+			if fc.onInvalidate != nil {
+				fc.onInvalidate()
+			}
+		}
 	}
 
 	if val := fc.store.Get(); val != nil {
@@ -187,7 +237,27 @@ func (fc *defaultContent[T]) Close() error {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 	fc.store.Clear()
+	if fc.onClose != nil {
+		fc.onClose()
+	}
 	return nil
+}
+
+func (fc *defaultContent[T]) HasContent() bool {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	return fc.store.Get() != nil
+}
+
+func (fc *defaultContent[T]) Invalidate() {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	if fc.store.Get() != nil {
+		fc.store.Clear()
+		if fc.onInvalidate != nil {
+			fc.onInvalidate()
+		}
+	}
 }
 
 func (fc *defaultContent[T]) String() string {
