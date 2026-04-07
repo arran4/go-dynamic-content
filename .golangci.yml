@@ -8,6 +8,8 @@ linters:
     - staticcheck
     - errcheck
     - ineffassign
-
-issues:
-  exclude-use-default: false
+  exclusions:
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
