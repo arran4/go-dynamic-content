@@ -9,10 +9,8 @@ import (
 type Content[T any] interface {
 	Data() (*T, error)
 	Close() error
-	SetGenerator(func() (*T, error))
 	String() string
-	IsValid() bool
-	SetValidator(func() bool)
+	Error() error
 	HasContent() bool
 	Invalidate() error
 }
@@ -283,28 +281,15 @@ func (fc *defaultContent[T]) String() string {
 	}
 }
 
-func (fc *defaultContent[T]) SetGenerator(generate func() (*T, error)) {
-	fc.mu.Lock()
-	defer fc.mu.Unlock()
-	fc.generate = generate
-	fc.store.Clear()
-	if !fc.lazy {
-		_, _ = fc.load()
-	}
-}
-
-func (fc *defaultContent[T]) IsValid() bool {
+func (fc *defaultContent[T]) Error() error {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 
 	if fc.isValid != nil && !fc.isValid() {
-		return false
+		return fmt.Errorf("content is invalid")
 	}
-	return fc.store.Get() != nil
-}
-
-func (fc *defaultContent[T]) SetValidator(isValid func() bool) {
-	fc.mu.Lock()
-	defer fc.mu.Unlock()
-	fc.isValid = isValid
+	if fc.store.Get() == nil {
+		return fmt.Errorf("no content available")
+	}
+	return nil
 }

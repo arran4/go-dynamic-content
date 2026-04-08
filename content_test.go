@@ -26,27 +26,16 @@ func testContentImpl(t *testing.T, fc Content[[]byte], generateCallsPtr *int) {
 		t.Errorf("expected at least 1 call to generate, got %d", *generateCallsPtr)
 	}
 
-	// Test SetGenerator and Close
-	fc.SetGenerator(func() (*[]byte, error) {
-		b := []byte("new world")
-		return &b, nil
-	})
-
-	b, err := fc.Data()
-	if err != nil {
-		t.Errorf("expected no error, got %v", err)
-	}
-	if string(*b) != "new world" {
-		t.Errorf("expected 'new world', got '%s'", string(*b))
-	}
-
-	err = fc.Close()
+	err := fc.Close()
 	if err != nil {
 		t.Errorf("expected no error from Close, got %v", err)
 	}
 
-	if fc.String() != "new world" {
-		t.Errorf("expected 'new world' from String(), got '%s'", fc.String())
+	// With the removal of SetGenerator, we can't change the generator inline
+	// So fetching String() will just trigger the generator again.
+	// Since the original generator returns "hello world", we check for it.
+	if fc.String() != "hello world" {
+		t.Errorf("expected 'hello world' from String() after close (due to regeneration), got '%s'", fc.String())
 	}
 }
 
@@ -117,8 +106,8 @@ func TestContent_Validator(t *testing.T) {
 		}),
 	)
 
-	if fc.IsValid() {
-		t.Errorf("expected IsValid() to be false initially as cache is empty")
+	if fc.Error() == nil {
+		t.Errorf("expected Error() to return an error initially as cache is empty")
 	}
 
 	b, err := fc.Data()
@@ -131,8 +120,8 @@ func TestContent_Validator(t *testing.T) {
 	if generateCalls != 1 {
 		t.Errorf("expected 1 generate call, got %d", generateCalls)
 	}
-	if !fc.IsValid() {
-		t.Errorf("expected IsValid() to be true after cache is populated")
+	if fc.Error() != nil {
+		t.Errorf("expected Error() to be nil after cache is populated")
 	}
 
 	// Should not generate again
@@ -143,8 +132,8 @@ func TestContent_Validator(t *testing.T) {
 
 	// Invalidate cache
 	valid = false
-	if fc.IsValid() {
-		t.Errorf("expected IsValid() to be false after validator changes")
+	if fc.Error() == nil {
+		t.Errorf("expected Error() to return an error after validator changes")
 	}
 
 	// Fetching data should now generate again
@@ -157,12 +146,6 @@ func TestContent_Validator(t *testing.T) {
 	}
 	if generateCalls != 2 {
 		t.Errorf("expected 2 generate calls, got %d", generateCalls)
-	}
-
-	// Test SetValidator
-	fc.SetValidator(func() bool { return false })
-	if fc.IsValid() {
-		t.Errorf("expected IsValid() to be false after SetValidator(false)")
 	}
 }
 
