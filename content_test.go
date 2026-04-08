@@ -172,34 +172,6 @@ func TestContent_HasContentAndInvalidate(t *testing.T) {
 	}
 }
 
-func TestContent_WithInvalidator(t *testing.T) {
-	var triggerInvalidate func() error
-
-	fc := NewContent[[]byte](
-		WithGenerator[[]byte](func() (*[]byte, error) {
-			b := []byte("content")
-			return &b, nil
-		}),
-		WithInvalidator[[]byte](func(invalidate func() error) {
-			triggerInvalidate = invalidate
-		}),
-	)
-
-	_, _ = fc.Data()
-	if !fc.HasContent() {
-		t.Errorf("expected HasContent() to be true")
-	}
-
-	if triggerInvalidate == nil {
-		t.Fatalf("expected triggerInvalidate to be set")
-	}
-
-	_ = triggerInvalidate()
-	if fc.HasContent() {
-		t.Errorf("expected HasContent() to be false after using invalidator trigger")
-	}
-}
-
 func TestContent_Callbacks(t *testing.T) {
 	generateCalls := 0
 	invalidateCalls := 0

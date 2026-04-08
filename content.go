@@ -109,12 +109,6 @@ func WithValue[T any](val T) Option[T] {
 	}
 }
 
-func WithInvalidator[T any](setup func(invalidate func() error)) Option[T] {
-	return func(cfg *contentConfig[T]) {
-		cfg.invalidatorSetup = setup
-	}
-}
-
 func WithOnGenerate[T any](cb func(val *T, err error)) Option[T] {
 	return func(cfg *contentConfig[T]) {
 		cfg.onGenerate = cb
@@ -138,7 +132,6 @@ type contentConfig[T any] struct {
 	lazy             bool
 	generate         func() (*T, error)
 	isValid          func() bool
-	invalidatorSetup func(invalidate func() error)
 	onGenerate       func(val *T, err error)
 	onInvalidate     func()
 	onClose          func()
@@ -173,10 +166,6 @@ func NewContent[T any](opts ...Option[T]) Content[T] {
 		onGenerate:   cfg.onGenerate,
 		onInvalidate: cfg.onInvalidate,
 		onClose:      cfg.onClose,
-	}
-
-	if cfg.invalidatorSetup != nil {
-		cfg.invalidatorSetup(fc.Invalidate)
 	}
 
 	if !fc.lazy {
