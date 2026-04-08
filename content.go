@@ -57,10 +57,10 @@ func (s *MemoryStore[T]) Clear() {
 	s.val = nil
 }
 
-type Option[T any] func(*defaultContent[T])
+type Option[T any] func(*contentImpl[T])
 
 func UseWeakStorage[T any](use bool) Option[T] {
-	return func(fc *defaultContent[T]) {
+	return func(fc *contentImpl[T]) {
 		if use {
 			fc.store = &WeakStore[T]{}
 		}
@@ -68,7 +68,7 @@ func UseWeakStorage[T any](use bool) Option[T] {
 }
 
 func UseMemoryStorage[T any](use bool) Option[T] {
-	return func(fc *defaultContent[T]) {
+	return func(fc *contentImpl[T]) {
 		if use {
 			fc.store = &MemoryStore[T]{}
 		}
@@ -76,7 +76,7 @@ func UseMemoryStorage[T any](use bool) Option[T] {
 }
 
 func UseLazyLoading[T any](use bool) Option[T] {
-	return func(fc *defaultContent[T]) {
+	return func(fc *contentImpl[T]) {
 		if use {
 			fc.lazy = true
 		}
@@ -84,7 +84,7 @@ func UseLazyLoading[T any](use bool) Option[T] {
 }
 
 func UseEagerLoading[T any](use bool) Option[T] {
-	return func(fc *defaultContent[T]) {
+	return func(fc *contentImpl[T]) {
 		if use {
 			fc.lazy = false
 		}
@@ -92,42 +92,42 @@ func UseEagerLoading[T any](use bool) Option[T] {
 }
 
 func WithGenerator[T any](generate func() (*T, error)) Option[T] {
-	return func(fc *defaultContent[T]) {
+	return func(fc *contentImpl[T]) {
 		fc.generate = generate
 	}
 }
 
 func WithValidator[T any](isValid func() bool) Option[T] {
-	return func(fc *defaultContent[T]) {
+	return func(fc *contentImpl[T]) {
 		fc.isValid = isValid
 	}
 }
 
 func WithValue[T any](val T) Option[T] {
-	return func(fc *defaultContent[T]) {
+	return func(fc *contentImpl[T]) {
 		fc.store.Set(&val)
 	}
 }
 
 func WithOnGenerate[T any](cb func(val *T, err error)) Option[T] {
-	return func(fc *defaultContent[T]) {
+	return func(fc *contentImpl[T]) {
 		fc.onGenerate = cb
 	}
 }
 
 func WithOnInvalidate[T any](cb func()) Option[T] {
-	return func(fc *defaultContent[T]) {
+	return func(fc *contentImpl[T]) {
 		fc.onInvalidate = cb
 	}
 }
 
 func WithOnClose[T any](cb func()) Option[T] {
-	return func(fc *defaultContent[T]) {
+	return func(fc *contentImpl[T]) {
 		fc.onClose = cb
 	}
 }
 
-type defaultContent[T any] struct {
+type contentImpl[T any] struct {
 	mu           sync.Mutex
 	store        Store[T]
 	lazy         bool
@@ -139,7 +139,7 @@ type defaultContent[T any] struct {
 }
 
 func NewContent[T any](opts ...Option[T]) Content[T] {
-	fc := &defaultContent[T]{
+	fc := &contentImpl[T]{
 		store: &MemoryStore[T]{},
 		lazy:  true,
 	}
@@ -155,7 +155,7 @@ func NewContent[T any](opts ...Option[T]) Content[T] {
 	return fc
 }
 
-func (fc *defaultContent[T]) load() (*T, error) {
+func (fc *contentImpl[T]) load() (*T, error) {
 	if fc.generate == nil {
 		return nil, nil // No generator provided, return nil or handle gracefully
 	}
@@ -175,7 +175,7 @@ func (fc *defaultContent[T]) load() (*T, error) {
 	return val, nil
 }
 
-func (fc *defaultContent[T]) Data() (*T, error) {
+func (fc *contentImpl[T]) Data() (*T, error) {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 
@@ -200,7 +200,7 @@ func (fc *defaultContent[T]) Data() (*T, error) {
 	return val, nil
 }
 
-func (fc *defaultContent[T]) Close() error {
+func (fc *contentImpl[T]) Close() error {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 	fc.store.Clear()
@@ -210,13 +210,13 @@ func (fc *defaultContent[T]) Close() error {
 	return nil
 }
 
-func (fc *defaultContent[T]) HasContent() bool {
+func (fc *contentImpl[T]) HasContent() bool {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 	return fc.store.Get() != nil
 }
 
-func (fc *defaultContent[T]) Invalidate() error {
+func (fc *contentImpl[T]) Invalidate() error {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 	if fc.store.Get() != nil {
@@ -228,7 +228,7 @@ func (fc *defaultContent[T]) Invalidate() error {
 	return nil
 }
 
-func (fc *defaultContent[T]) String() string {
+func (fc *contentImpl[T]) String() string {
 	val, err := fc.Data()
 	if err != nil {
 		return "" // Suppress error for templates
@@ -250,7 +250,7 @@ func (fc *defaultContent[T]) String() string {
 	}
 }
 
-func (fc *defaultContent[T]) Error() error {
+func (fc *contentImpl[T]) Error() error {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 
