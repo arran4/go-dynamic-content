@@ -9,10 +9,10 @@ import (
 type Content[T any] interface {
 	Data() (*T, error)
 	Close() error
-	SetGenerator(func() (*T, error))
 	String() string
-	IsValid() bool
-	SetValidator(func() bool)
+	Error() error
+	HasContent() bool
+	Invalidate() error
 }
 
 type Store[T any] interface {
@@ -57,88 +57,95 @@ func (s *MemoryStore[T]) Clear() {
 	s.val = nil
 }
 
-type Option[T any] func(*contentConfig[T])
+type Option[T any] func(*contentImpl[T])
 
 func UseWeakStorage[T any](use bool) Option[T] {
-	return func(cfg *contentConfig[T]) {
+	return func(fc *contentImpl[T]) {
 		if use {
-			cfg.store = &WeakStore[T]{}
+			fc.store = &WeakStore[T]{}
 		}
 	}
 }
 
 func UseMemoryStorage[T any](use bool) Option[T] {
-	return func(cfg *contentConfig[T]) {
+	return func(fc *contentImpl[T]) {
 		if use {
-			cfg.store = &MemoryStore[T]{}
+			fc.store = &MemoryStore[T]{}
 		}
 	}
 }
 
 func UseLazyLoading[T any](use bool) Option[T] {
-	return func(cfg *contentConfig[T]) {
+	return func(fc *contentImpl[T]) {
 		if use {
-			cfg.lazy = true
+			fc.lazy = true
 		}
 	}
 }
 
 func UseEagerLoading[T any](use bool) Option[T] {
-	return func(cfg *contentConfig[T]) {
+	return func(fc *contentImpl[T]) {
 		if use {
-			cfg.lazy = false
+			fc.lazy = false
 		}
 	}
 }
 
 func WithGenerator[T any](generate func() (*T, error)) Option[T] {
-	return func(cfg *contentConfig[T]) {
-		cfg.generate = generate
+	return func(fc *contentImpl[T]) {
+		fc.generate = generate
 	}
 }
 
 func WithValidator[T any](isValid func() bool) Option[T] {
-	return func(cfg *contentConfig[T]) {
-		cfg.isValid = isValid
+	return func(fc *contentImpl[T]) {
+		fc.isValid = isValid
 	}
 }
 
 func WithValue[T any](val T) Option[T] {
-	return func(cfg *contentConfig[T]) {
-		cfg.store.Set(&val)
+	return func(fc *contentImpl[T]) {
+		fc.store.Set(&val)
 	}
 }
 
-type contentConfig[T any] struct {
-	store    Store[T]
-	lazy     bool
-	generate func() (*T, error)
-	isValid  func() bool
+func WithOnGenerate[T any](cb func(val *T, err error)) Option[T] {
+	return func(fc *contentImpl[T]) {
+		fc.onGenerate = cb
+	}
 }
 
-type defaultContent[T any] struct {
-	mu       sync.Mutex
-	store    Store[T]
-	lazy     bool
-	generate func() (*T, error)
-	isValid  func() bool
+func WithOnInvalidate[T any](cb func()) Option[T] {
+	return func(fc *contentImpl[T]) {
+		fc.onInvalidate = cb
+	}
+}
+
+func WithOnClose[T any](cb func()) Option[T] {
+	return func(fc *contentImpl[T]) {
+		fc.onClose = cb
+	}
+}
+
+type contentImpl[T any] struct {
+	mu           sync.Mutex
+	store        Store[T]
+	lazy         bool
+	generate     func() (*T, error)
+	isValid      func() bool
+	onGenerate   func(val *T, err error)
+	onInvalidate func()
+	onClose      func()
 }
 
 func NewContent[T any](opts ...Option[T]) Content[T] {
-	cfg := contentConfig[T]{
+	fc := &contentImpl[T]{
 		store: &MemoryStore[T]{},
 		lazy:  true,
 	}
 
 	for _, opt := range opts {
-		opt(&cfg)
-	}
-
-	fc := &defaultContent[T]{
-		store:    cfg.store,
-		lazy:     cfg.lazy,
-		generate: cfg.generate,
-		isValid:  cfg.isValid,
+		opt(fc)
 	}
 
 	if !fc.lazy {
@@ -148,11 +155,16 @@ func NewContent[T any](opts ...Option[T]) Content[T] {
 	return fc
 }
 
-func (fc *defaultContent[T]) load() (*T, error) {
+func (fc *contentImpl[T]) load() (*T, error) {
 	if fc.generate == nil {
 		return nil, nil // No generator provided, return nil or handle gracefully
 	}
 	val, err := fc.generate()
+
+	if fc.onGenerate != nil {
+		fc.onGenerate(val, err)
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -163,12 +175,17 @@ func (fc *defaultContent[T]) load() (*T, error) {
 	return val, nil
 }
 
-func (fc *defaultContent[T]) Data() (*T, error) {
+func (fc *contentImpl[T]) Data() (*T, error) {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 
 	if fc.isValid != nil && !fc.isValid() {
-		fc.store.Clear()
+		if fc.store.Get() != nil {
+			fc.store.Clear()
+			if fc.onInvalidate != nil {
+				fc.onInvalidate()
+			}
+		}
 	}
 
 	if val := fc.store.Get(); val != nil {
@@ -183,14 +200,35 @@ func (fc *defaultContent[T]) Data() (*T, error) {
 	return val, nil
 }
 
-func (fc *defaultContent[T]) Close() error {
+func (fc *contentImpl[T]) Close() error {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 	fc.store.Clear()
+	if fc.onClose != nil {
+		fc.onClose()
+	}
 	return nil
 }
 
-func (fc *defaultContent[T]) String() string {
+func (fc *contentImpl[T]) HasContent() bool {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	return fc.store.Get() != nil
+}
+
+func (fc *contentImpl[T]) Invalidate() error {
+	fc.mu.Lock()
+	defer fc.mu.Unlock()
+	if fc.store.Get() != nil {
+		fc.store.Clear()
+		if fc.onInvalidate != nil {
+			fc.onInvalidate()
+		}
+	}
+	return nil
+}
+
+func (fc *contentImpl[T]) String() string {
 	val, err := fc.Data()
 	if err != nil {
 		return "" // Suppress error for templates
@@ -212,28 +250,15 @@ func (fc *defaultContent[T]) String() string {
 	}
 }
 
-func (fc *defaultContent[T]) SetGenerator(generate func() (*T, error)) {
-	fc.mu.Lock()
-	defer fc.mu.Unlock()
-	fc.generate = generate
-	fc.store.Clear()
-	if !fc.lazy {
-		_, _ = fc.load()
-	}
-}
-
-func (fc *defaultContent[T]) IsValid() bool {
+func (fc *contentImpl[T]) Error() error {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 
 	if fc.isValid != nil && !fc.isValid() {
-		return false
+		return fmt.Errorf("content is invalid")
 	}
-	return fc.store.Get() != nil
-}
-
-func (fc *defaultContent[T]) SetValidator(isValid func() bool) {
-	fc.mu.Lock()
-	defer fc.mu.Unlock()
-	fc.isValid = isValid
+	if fc.store.Get() == nil {
+		return fmt.Errorf("no content available")
+	}
+	return nil
 }
