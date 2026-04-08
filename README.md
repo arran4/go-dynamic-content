@@ -107,9 +107,11 @@ func main() {
 ### `Content[T any]`
 The `Content` interface represents the core of the library, providing methods to interact with cached content:
 - **`Data() (*T, error)`**: Returns a pointer to the value containing the generated content. If the content hasn't been generated yet (lazy loading), it will generate it.
-- **`Close() error`**: Clears the currently cached data from the underlying store.
-- **`SetGenerator(func() (*T, error))`**: Updates the generator function and clears any currently cached data. If eager loading is enabled, it will immediately generate the content.
+- **`Close() error`**: Clears the currently cached data from the underlying store and triggers the `onClose` callback if set.
 - **`String() string`**: A convenience method that returns the generated content as a string. Suppresses errors and returns an empty string if data generation fails. If the type is `string`, `[]byte`, or `fmt.Stringer`, it will natively format it.
+- **`Error() error`**: Evaluates whether the content state is currently valid. Returns `nil` if valid, or an error detailing why it is invalid (e.g., failed validation check or missing content).
+- **`HasContent() bool`**: Returns true if the underlying store currently holds a generated value.
+- **`Invalidate() error`**: Explicitly clears the cached content from the underlying store and triggers the `onInvalidate` callback if set.
 
 ### Storage Interfaces
 - **`Store[T any]`**: The interface defining how objects are stored and retrieved (`Get()`, `Set()`, `Clear()`).
@@ -125,7 +127,11 @@ The `NewContent[T any](opts ...Option[T])` constructor accepts the following opt
 - **`UseLazyLoading[T](bool)`:** Delays the execution of the generator function until `Data()` or `String()` is first called (this is the default behavior).
 - **`UseEagerLoading[T](bool)`:** Immediately executes the generator function during the `NewContent` call.
 - **`WithGenerator[T](func() (*T, error))`:** The function that supplies the content when needed.
+- **`WithValidator[T](func() bool)`:** Sets a function that determines whether the currently cached content is still valid.
 - **`WithValue[T](T)`:** Directly sets the content cache with the provided static value.
+- **`WithOnGenerate[T](func(val *T, err error))`:** A callback executed immediately after a generation attempt.
+- **`WithOnInvalidate[T](func())`:** A callback executed when content is cleared from the store due to invalidation.
+- **`WithOnClose[T](func())`:** A callback executed when `Close()` is called.
 
 ## License
 
