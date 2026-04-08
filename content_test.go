@@ -183,21 +183,21 @@ func TestContent_HasContentAndInvalidate(t *testing.T) {
 		t.Errorf("expected HasContent() to be true after data generation")
 	}
 
-	fc.Invalidate()
+	_ = fc.Invalidate()
 	if fc.HasContent() {
 		t.Errorf("expected HasContent() to be false after invalidation")
 	}
 }
 
 func TestContent_WithInvalidator(t *testing.T) {
-	var triggerInvalidate func()
+	var triggerInvalidate func() error
 
 	fc := NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			b := []byte("content")
 			return &b, nil
 		}),
-		WithInvalidator[[]byte](func(invalidate func()) {
+		WithInvalidator[[]byte](func(invalidate func() error) {
 			triggerInvalidate = invalidate
 		}),
 	)
@@ -211,7 +211,7 @@ func TestContent_WithInvalidator(t *testing.T) {
 		t.Fatalf("expected triggerInvalidate to be set")
 	}
 
-	triggerInvalidate()
+	_ = triggerInvalidate()
 	if fc.HasContent() {
 		t.Errorf("expected HasContent() to be false after using invalidator trigger")
 	}
@@ -243,13 +243,13 @@ func TestContent_Callbacks(t *testing.T) {
 		t.Errorf("expected 1 generate call, got %d", generateCalls)
 	}
 
-	fc.Invalidate()
+	_ = fc.Invalidate()
 	if invalidateCalls != 1 {
 		t.Errorf("expected 1 invalidate call, got %d", invalidateCalls)
 	}
 
 	// Should not trigger again if already empty
-	fc.Invalidate()
+	_ = fc.Invalidate()
 	if invalidateCalls != 1 {
 		t.Errorf("expected invalidate call count to remain 1, got %d", invalidateCalls)
 	}

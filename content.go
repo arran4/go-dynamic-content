@@ -14,7 +14,7 @@ type Content[T any] interface {
 	IsValid() bool
 	SetValidator(func() bool)
 	HasContent() bool
-	Invalidate()
+	Invalidate() error
 }
 
 type Store[T any] interface {
@@ -111,7 +111,7 @@ func WithValue[T any](val T) Option[T] {
 	}
 }
 
-func WithInvalidator[T any](setup func(invalidate func())) Option[T] {
+func WithInvalidator[T any](setup func(invalidate func() error)) Option[T] {
 	return func(cfg *contentConfig[T]) {
 		cfg.invalidatorSetup = setup
 	}
@@ -140,7 +140,7 @@ type contentConfig[T any] struct {
 	lazy             bool
 	generate         func() (*T, error)
 	isValid          func() bool
-	invalidatorSetup func(invalidate func())
+	invalidatorSetup func(invalidate func() error)
 	onGenerate       func(val *T, err error)
 	onInvalidate     func()
 	onClose          func()
@@ -249,7 +249,7 @@ func (fc *defaultContent[T]) HasContent() bool {
 	return fc.store.Get() != nil
 }
 
-func (fc *defaultContent[T]) Invalidate() {
+func (fc *defaultContent[T]) Invalidate() error {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 	if fc.store.Get() != nil {
@@ -258,6 +258,7 @@ func (fc *defaultContent[T]) Invalidate() {
 			fc.onInvalidate()
 		}
 	}
+	return nil
 }
 
 func (fc *defaultContent[T]) String() string {
