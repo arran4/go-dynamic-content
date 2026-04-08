@@ -57,84 +57,74 @@ func (s *MemoryStore[T]) Clear() {
 	s.val = nil
 }
 
-type Option[T any] func(*contentConfig[T])
+type Option[T any] func(*defaultContent[T])
 
 func UseWeakStorage[T any](use bool) Option[T] {
-	return func(cfg *contentConfig[T]) {
+	return func(fc *defaultContent[T]) {
 		if use {
-			cfg.store = &WeakStore[T]{}
+			fc.store = &WeakStore[T]{}
 		}
 	}
 }
 
 func UseMemoryStorage[T any](use bool) Option[T] {
-	return func(cfg *contentConfig[T]) {
+	return func(fc *defaultContent[T]) {
 		if use {
-			cfg.store = &MemoryStore[T]{}
+			fc.store = &MemoryStore[T]{}
 		}
 	}
 }
 
 func UseLazyLoading[T any](use bool) Option[T] {
-	return func(cfg *contentConfig[T]) {
+	return func(fc *defaultContent[T]) {
 		if use {
-			cfg.lazy = true
+			fc.lazy = true
 		}
 	}
 }
 
 func UseEagerLoading[T any](use bool) Option[T] {
-	return func(cfg *contentConfig[T]) {
+	return func(fc *defaultContent[T]) {
 		if use {
-			cfg.lazy = false
+			fc.lazy = false
 		}
 	}
 }
 
 func WithGenerator[T any](generate func() (*T, error)) Option[T] {
-	return func(cfg *contentConfig[T]) {
-		cfg.generate = generate
+	return func(fc *defaultContent[T]) {
+		fc.generate = generate
 	}
 }
 
 func WithValidator[T any](isValid func() bool) Option[T] {
-	return func(cfg *contentConfig[T]) {
-		cfg.isValid = isValid
+	return func(fc *defaultContent[T]) {
+		fc.isValid = isValid
 	}
 }
 
 func WithValue[T any](val T) Option[T] {
-	return func(cfg *contentConfig[T]) {
-		cfg.store.Set(&val)
+	return func(fc *defaultContent[T]) {
+		fc.store.Set(&val)
 	}
 }
 
 func WithOnGenerate[T any](cb func(val *T, err error)) Option[T] {
-	return func(cfg *contentConfig[T]) {
-		cfg.onGenerate = cb
+	return func(fc *defaultContent[T]) {
+		fc.onGenerate = cb
 	}
 }
 
 func WithOnInvalidate[T any](cb func()) Option[T] {
-	return func(cfg *contentConfig[T]) {
-		cfg.onInvalidate = cb
+	return func(fc *defaultContent[T]) {
+		fc.onInvalidate = cb
 	}
 }
 
 func WithOnClose[T any](cb func()) Option[T] {
-	return func(cfg *contentConfig[T]) {
-		cfg.onClose = cb
+	return func(fc *defaultContent[T]) {
+		fc.onClose = cb
 	}
-}
-
-type contentConfig[T any] struct {
-	store            Store[T]
-	lazy             bool
-	generate         func() (*T, error)
-	isValid          func() bool
-	onGenerate       func(val *T, err error)
-	onInvalidate     func()
-	onClose          func()
 }
 
 type defaultContent[T any] struct {
@@ -149,23 +139,13 @@ type defaultContent[T any] struct {
 }
 
 func NewContent[T any](opts ...Option[T]) Content[T] {
-	cfg := contentConfig[T]{
+	fc := &defaultContent[T]{
 		store: &MemoryStore[T]{},
 		lazy:  true,
 	}
 
 	for _, opt := range opts {
-		opt(&cfg)
-	}
-
-	fc := &defaultContent[T]{
-		store:        cfg.store,
-		lazy:         cfg.lazy,
-		generate:     cfg.generate,
-		isValid:      cfg.isValid,
-		onGenerate:   cfg.onGenerate,
-		onInvalidate: cfg.onInvalidate,
-		onClose:      cfg.onClose,
+		opt(fc)
 	}
 
 	if !fc.lazy {
