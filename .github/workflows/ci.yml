@@ -93,7 +93,7 @@ jobs:
           case "${{ github.event_name }}" in
             push)
               run_code_checks=true
-              if [[ "${{ github.ref }}" == refs/tags/v* ]] || [[ "${{ github.ref }}" == refs/tags/test-* ]]; then
+              if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
                 run_build=true
                 run_release=true
               fi
@@ -131,8 +131,8 @@ jobs:
                   ;;
                 publish-tag)
                   # Internal publisher dispatch mode
-                  if [[ "${{ github.ref_type }}" != "tag" ]]; then
-                    echo "publish-tag mode requires an eligible tag context" >&2
+                  if [[ "${{ github.ref_type }}" != "tag" || ! "${{ github.ref }}" =~ ^refs/tags/v.* ]]; then
+                    echo "publish-tag mode requires an eligible tag context (e.g. refs/tags/v*)" >&2
                     exit 1
                   fi
                   run_code_checks=true
@@ -598,7 +598,7 @@ jobs:
   github-release:
     name: Publish GitHub release
     needs: [route, discover, release-context]
-    if: ${{ !failure() && !cancelled() && needs.route.outputs.run_release == 'true' && startsWith(github.ref, 'refs/tags/') }}
+    if: ${{ !failure() && !cancelled() && needs.route.outputs.run_release == 'true' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
