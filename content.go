@@ -139,6 +139,7 @@ type contentImpl[T any] struct {
 
 	epoch      uint64
 	generating bool
+	genWait    chan struct{} // blocks concurrent callers during generation
 }
 
 func NewContent[T any](opts ...Option[T]) Content[T] {
@@ -163,18 +164,16 @@ func (fc *contentImpl[T]) Data() (*T, error) {
 	for {
 		// 1. Snapshot state under lock
 		fc.mu.Lock()
+		if fc.generating {
+			waitChan := fc.genWait
+			fc.mu.Unlock()
+			<-waitChan
+			continue
+		}
+
 		val := fc.store.Get()
-		isGen := fc.generating
 		snapshotEpoch := fc.epoch
 		fc.mu.Unlock()
-
-		// If a generation is currently in flight, we don't block.
-		// Instead, we return the cached value (even if nil or stale).
-		// This prevents duplicate generation by concurrent callers (they just get the stale/nil value),
-		// and prevents a self-deadlock if the generator code itself calls Data() on re-entry.
-		if isGen {
-			return val, nil
-		}
 
 		// 2. Evaluate validity without lock
 		if val != nil && fc.isValid != nil {
@@ -202,9 +201,10 @@ func (fc *contentImpl[T]) Data() (*T, error) {
 		// 3. Return valid value or take ownership of generation
 		fc.mu.Lock()
 		if fc.generating {
-			val := fc.store.Get()
+			waitChan := fc.genWait
 			fc.mu.Unlock()
-			return val, nil
+			<-waitChan
+			continue
 		}
 
 		if val := fc.store.Get(); val != nil {
@@ -214,12 +214,16 @@ func (fc *contentImpl[T]) Data() (*T, error) {
 
 		// Take ownership
 		fc.generating = true
+		waitChan := make(chan struct{})
+		fc.genWait = waitChan
 		myEpoch := fc.epoch
 		fc.mu.Unlock()
 
 		if fc.generate == nil {
 			fc.mu.Lock()
 			fc.generating = false
+			fc.genWait = nil
+			close(waitChan)
 			fc.mu.Unlock()
 			return nil, nil
 		}
@@ -240,6 +244,8 @@ func (fc *contentImpl[T]) Data() (*T, error) {
 					fc.epoch++
 				}
 				fc.generating = false
+				fc.genWait = nil
+				close(waitChan)
 				fc.mu.Unlock()
 			}()
 			genVal, genErr = fc.generate()
@@ -316,16 +322,16 @@ func (fc *contentImpl[T]) String() string {
 }
 
 func (fc *contentImpl[T]) Error() error {
+	if fc.isValid != nil && !fc.isValid() {
+		return fmt.Errorf("content is invalid")
+	}
+
 	fc.mu.Lock()
 	val := fc.store.Get()
 	fc.mu.Unlock()
 
 	if val == nil {
 		return fmt.Errorf("no content available")
-	}
-
-	if fc.isValid != nil && !fc.isValid() {
-		return fmt.Errorf("content is invalid")
 	}
 
 	return nil
