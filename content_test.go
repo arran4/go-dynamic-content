@@ -662,3 +662,32 @@ func TestContent_ReentrantIsValidDirect(t *testing.T) {
 		t.Fatalf("TestContent_ReentrantIsValidDirect timed out (infinite recursion or deadlock)")
 	}
 }
+
+func TestContent_ErrorPrecedence(t *testing.T) {
+	fc := NewContent[[]byte](
+		WithValidator[[]byte](func() bool {
+			return false
+		}),
+	)
+
+	err := fc.Error()
+	if err == nil || err.Error() != "content is invalid" {
+		t.Errorf("expected 'content is invalid', got %v", err)
+	}
+}
+
+func TestContent_ErrorInFlightState(t *testing.T) {
+	var isValidCalls int32
+	fc := NewContent[[]byte](
+		WithValidator[[]byte](func() bool {
+			atomic.AddInt32(&isValidCalls, 1)
+			return false
+		}),
+	)
+
+	// Start with empty cache. The error should natively report invalid.
+	_ = fc.Error()
+	if atomic.LoadInt32(&isValidCalls) != 1 {
+		t.Errorf("expected 1 call to isValid, got %d", atomic.LoadInt32(&isValidCalls))
+	}
+}

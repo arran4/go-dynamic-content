@@ -350,18 +350,32 @@ func (fc *contentImpl[T]) String() string {
 func (fc *contentImpl[T]) Error() error {
 	fc.mu.Lock()
 	val := fc.store.Get()
+	isGen := fc.generating
 	isVal := fc.validating
 	fc.mu.Unlock()
 
-	if val == nil {
-		return fmt.Errorf("no content available")
+	// IN-FLIGHT CONCURRENCY STATE:
+	// If generating or validating is actively in progress, we return the currently committed
+	// cache snapshot state. This deliberately assumes optimistic validity if content exists,
+	// securely breaking direct `isValid -> Error()` infinite recursion cycles without deadlocks,
+	// and providing a coherent non-blocking state to concurrent callers.
+	if isGen || isVal {
+		if val == nil {
+			return fmt.Errorf("no content available")
+		}
+		return nil
 	}
 
-	if fc.isValid != nil && !isVal {
+	// 1. Evaluate validity first to preserve error precedence
+	if fc.isValid != nil {
 		fc.mu.Lock()
 		if fc.validating {
 			fc.mu.Unlock()
-			return nil // If currently validating somewhere else, assume valid for now to break cycles
+			val = fc.store.Get()
+			if val == nil {
+				return fmt.Errorf("no content available")
+			}
+			return nil
 		}
 		fc.validating = true
 		fc.mu.Unlock()
@@ -390,6 +404,15 @@ func (fc *contentImpl[T]) Error() error {
 				return fmt.Errorf("content is invalid")
 			}
 		}
+	}
+
+	// 2. Evaluate content presence second
+	fc.mu.Lock()
+	val = fc.store.Get()
+	fc.mu.Unlock()
+
+	if val == nil {
+		return fmt.Errorf("no content available")
 	}
 
 	return nil
