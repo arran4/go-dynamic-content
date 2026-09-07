@@ -464,17 +464,19 @@ func TestContent_ReentrantIsValid(t *testing.T) {
 		WithValidator[[]byte](func() bool {
 			calls := atomic.AddInt32(&isValidCalls, 1)
 			if calls == 2 {
-				// Re-entry during validation evaluation should not deadlock
-				// We just test we can safely call HasContent to read state.
+				// Direct Re-entry during validation evaluation should not infinitely recurse
+				// or deadlock.
 				done := make(chan struct{})
 				go func() {
-					_ = fc.HasContent()
+					// These should both safely return the cached state without recursing isValid
+					_ = fc.Error()
+					_, _ = fc.Data()
 					close(done)
 				}()
 				select {
 				case <-done:
 				case <-time.After(1 * time.Second):
-					t.Fatalf("TestContent_ReentrantIsValid timed out (deadlock)")
+					t.Fatalf("TestContent_ReentrantIsValid timed out (infinite recursion or deadlock)")
 				}
 			}
 			return true
@@ -618,5 +620,45 @@ func TestContent_ReentrantGenerate(t *testing.T) {
 
 	if atomic.LoadInt32(&generateCalls) != 1 {
 		t.Errorf("expected 1 generate call, got %d", atomic.LoadInt32(&generateCalls))
+	}
+}
+
+func TestContent_ReentrantIsValidDirect(t *testing.T) {
+	var generateCalls int32
+	var isValidCalls int32
+	var fc Content[[]byte]
+
+	fc = NewContent[[]byte](
+		WithGenerator[[]byte](func() (*[]byte, error) {
+			atomic.AddInt32(&generateCalls, 1)
+			b := []byte("content")
+			return &b, nil
+		}),
+		WithValidator[[]byte](func() bool {
+			calls := atomic.AddInt32(&isValidCalls, 1)
+			if calls == 2 {
+				// Direct Re-entry! The validator ITSELF calls Data/Error,
+				// NOT a separate goroutine.
+				_ = fc.Error()
+				_, _ = fc.Data()
+			}
+			return true
+		}),
+	)
+
+	// Fetch 1: Populates
+	_, _ = fc.Data()
+
+	done := make(chan struct{})
+	go func() {
+		// Fetch 2: Evaluates isValid (calls == 2), which triggers the direct re-entry
+		_, _ = fc.Data()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(1 * time.Second):
+		t.Fatalf("TestContent_ReentrantIsValidDirect timed out (infinite recursion or deadlock)")
 	}
 }
