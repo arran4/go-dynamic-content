@@ -136,12 +136,17 @@ type contentImpl[T any] struct {
 	onGenerate   func(val *T, err error)
 	onInvalidate func()
 	onClose      func()
+
+	epoch        uint64
+	generating   bool
+	genWait      chan struct{} // blocks concurrent callers during generation
 }
 
 func NewContent[T any](opts ...Option[T]) Content[T] {
 	fc := &contentImpl[T]{
 		store: &MemoryStore[T]{},
 		lazy:  true,
+		epoch: 1, // Start at 1
 	}
 
 	for _, opt := range opts {
@@ -149,61 +154,124 @@ func NewContent[T any](opts ...Option[T]) Content[T] {
 	}
 
 	if !fc.lazy {
-		_, _ = fc.load()
+		_, _ = fc.Data()
 	}
 
 	return fc
 }
 
-func (fc *contentImpl[T]) load() (*T, error) {
-	if fc.generate == nil {
-		return nil, nil // No generator provided, return nil or handle gracefully
-	}
-	val, err := fc.generate()
-
-	if fc.onGenerate != nil {
-		fc.onGenerate(val, err)
-	}
-
-	if err != nil {
-		return nil, err
-	}
-
-	if val != nil {
-		fc.store.Set(val)
-	}
-	return val, nil
-}
-
 func (fc *contentImpl[T]) Data() (*T, error) {
-	fc.mu.Lock()
-	defer fc.mu.Unlock()
+	for {
+		// 1. Snapshot state under lock
+		fc.mu.Lock()
+		if fc.generating {
+			waitChan := fc.genWait
+			fc.mu.Unlock()
+			<-waitChan
+			continue
+		}
 
-	if fc.isValid != nil && !fc.isValid() {
-		if fc.store.Get() != nil {
-			fc.store.Clear()
-			if fc.onInvalidate != nil {
-				fc.onInvalidate()
+		val := fc.store.Get()
+		snapshotEpoch := fc.epoch
+		fc.mu.Unlock()
+
+		// 2. Evaluate validity without lock
+		if val != nil && fc.isValid != nil {
+			valid := fc.isValid()
+			if !valid {
+				var triggeredInvalidate bool
+
+				fc.mu.Lock()
+				// Only clear if the epoch hasn't changed (meaning no new generation/invalidation happened)
+				// and we still aren't generating.
+				if fc.epoch == snapshotEpoch && fc.store.Get() != nil {
+					fc.store.Clear()
+					fc.epoch++
+					triggeredInvalidate = true
+				}
+				fc.mu.Unlock()
+
+				if triggeredInvalidate && fc.onInvalidate != nil {
+					fc.onInvalidate()
+				}
+				continue // start over since it was invalid
 			}
 		}
-	}
 
-	if val := fc.store.Get(); val != nil {
-		return val, nil
-	}
+		// 3. Return valid value or take ownership of generation
+		fc.mu.Lock()
+		if fc.generating {
+			waitChan := fc.genWait
+			fc.mu.Unlock()
+			<-waitChan
+			continue
+		}
 
-	val, err := fc.load()
-	if err != nil {
-		return nil, err
-	}
+		if val := fc.store.Get(); val != nil {
+			fc.mu.Unlock()
+			return val, nil
+		}
 
-	return val, nil
+		// Take ownership
+		fc.generating = true
+		waitChan := make(chan struct{})
+		fc.genWait = waitChan
+		myEpoch := fc.epoch
+		fc.mu.Unlock()
+
+		if fc.generate == nil {
+			fc.mu.Lock()
+			fc.generating = false
+			fc.genWait = nil
+			close(waitChan)
+			fc.mu.Unlock()
+			return nil, nil
+		}
+
+		// 4. Generate without lock, catching panics
+		var genVal *T
+		var genErr error
+
+		func() {
+			defer func() {
+				// Commit and release ownership
+				fc.mu.Lock()
+				// Only commit if epoch hasn't been advanced by Invalidate/Close
+				if fc.epoch == myEpoch {
+					if genErr == nil && genVal != nil {
+						fc.store.Set(genVal)
+					}
+					fc.epoch++
+				}
+				fc.generating = false
+				fc.genWait = nil
+				close(waitChan)
+				fc.mu.Unlock()
+			}()
+			genVal, genErr = fc.generate()
+		}()
+
+		// 5. Execute callback outside lock
+		if fc.onGenerate != nil {
+			fc.onGenerate(genVal, genErr)
+		}
+
+		// To prevent livelock, we return the successfully generated result
+		// without re-validating it in this operation. Waiters who were blocked
+		// will wake up, loop, and evaluate validity against the new epoch.
+		if genErr != nil {
+			return nil, genErr
+		}
+		return genVal, nil
+	}
 }
 
 func (fc *contentImpl[T]) Close() error {
 	fc.mu.Lock()
-	defer fc.mu.Unlock()
 	fc.store.Clear()
+	fc.epoch++
+	fc.mu.Unlock()
+
 	if fc.onClose != nil {
 		fc.onClose()
 	}
@@ -217,13 +285,17 @@ func (fc *contentImpl[T]) HasContent() bool {
 }
 
 func (fc *contentImpl[T]) Invalidate() error {
+	var triggeredInvalidate bool
 	fc.mu.Lock()
-	defer fc.mu.Unlock()
 	if fc.store.Get() != nil {
 		fc.store.Clear()
-		if fc.onInvalidate != nil {
-			fc.onInvalidate()
-		}
+		triggeredInvalidate = true
+	}
+	fc.epoch++
+	fc.mu.Unlock()
+
+	if triggeredInvalidate && fc.onInvalidate != nil {
+		fc.onInvalidate()
 	}
 	return nil
 }

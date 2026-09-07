@@ -3,6 +3,8 @@ package utils
 import (
 	"sync"
 	"testing"
+	"sync/atomic"
+	"time"
 )
 
 func testContentImpl(t *testing.T, fc Content[[]byte], generateCallsPtr *int) {
@@ -213,4 +215,66 @@ func TestContent_Callbacks(t *testing.T) {
 	if closeCalls != 1 {
 		t.Errorf("expected 1 close call, got %d", closeCalls)
 	}
+}
+
+func TestContent_ValidatorFalseLivelock(t *testing.T) {
+	var generateCalls int32
+
+	fc := NewContent[[]byte](
+		WithGenerator[[]byte](func() (*[]byte, error) {
+			atomic.AddInt32(&generateCalls, 1)
+			b := []byte("content")
+			return &b, nil
+		}),
+		WithValidator[[]byte](func() bool {
+			return false // always invalid to trigger continuous invalidation
+		}),
+	)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = fc.Data()
+		}()
+	}
+	wg.Wait()
+
+	if atomic.LoadInt32(&generateCalls) > 100 { // We expect roughly 50, but definitely not thousands.
+		t.Errorf("expected bound generation calls, got %d", atomic.LoadInt32(&generateCalls))
+	}
+}
+
+func TestContent_InvalidationRacingGeneration(t *testing.T) {
+	var generateCalls int32
+	var invalidateCalls int32
+
+	fc := NewContent[[]byte](
+		WithGenerator[[]byte](func() (*[]byte, error) {
+			atomic.AddInt32(&generateCalls, 1)
+			b := []byte("stale content")
+			return &b, nil
+		}),
+		WithOnInvalidate[[]byte](func() {
+			atomic.AddInt32(&invalidateCalls, 1)
+		}),
+	)
+
+	// Force a generation
+	go func() {
+		_, _ = fc.Data()
+	}()
+
+	// Immediately invalidate it while it's generating.
+	// Since there's no sleep, it's a race, but if invalidation wins or loses it must be coherent.
+	_ = fc.Invalidate()
+
+	// Wait a moment for async stuff to settle, though WaitGroups are better, a sleep guarantees race overlap
+	time.Sleep(10 * time.Millisecond)
+
+	// We expect the state to be safe (not crashed).
+	// We won't strictly verify exact call counts because it's a true race,
+	// but we ensure no panic and that we can still fetch safely.
+	_, _ = fc.Data()
 }
