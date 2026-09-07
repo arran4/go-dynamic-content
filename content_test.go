@@ -2,8 +2,8 @@ package utils
 
 import (
 	"sync"
-	"testing"
 	"sync/atomic"
+	"testing"
 	"time"
 )
 
@@ -17,12 +17,12 @@ func testContentImpl(t *testing.T, fc Content[[]byte], generateCallsPtr *int) {
 			if err != nil {
 				t.Errorf("expected no error, got %v", err)
 			}
-			if string(*b) != "hello world" {
+			if b != nil && string(*b) != "hello world" {
 				t.Errorf("expected 'hello world', got '%s'", string(*b))
 			}
 		}()
 	}
-	wg.Wait()
+	WaitWgWithTimeout(t, &wg)
 
 	if *generateCallsPtr < 1 {
 		t.Errorf("expected at least 1 call to generate, got %d", *generateCallsPtr)
@@ -239,7 +239,7 @@ func TestContent_ValidatorFalseLivelock(t *testing.T) {
 			_, _ = fc.Data()
 		}()
 	}
-	wg.Wait()
+	WaitWgWithTimeout(t, &wg)
 
 	if atomic.LoadInt32(&generateCalls) > 100 { // We expect roughly 50, but definitely not thousands.
 		t.Errorf("expected bound generation calls, got %d", atomic.LoadInt32(&generateCalls))
@@ -250,9 +250,21 @@ func TestContent_InvalidationRacingGeneration(t *testing.T) {
 	var generateCalls int32
 	var invalidateCalls int32
 
+	genStarted := make(chan struct{})
+	genWait := make(chan struct{})
+	var genStartedOnce sync.Once
+
 	fc := NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			atomic.AddInt32(&generateCalls, 1)
+			genStartedOnce.Do(func() { close(genStarted) })
+
+			// We only want to wait on genWait the first time.
+			// The second time (fresh generation), we just return.
+			if atomic.LoadInt32(&generateCalls) == 1 {
+				<-genWait
+			}
+
 			b := []byte("stale content")
 			return &b, nil
 		}),
@@ -262,19 +274,93 @@ func TestContent_InvalidationRacingGeneration(t *testing.T) {
 	)
 
 	// Force a generation
+	var wg sync.WaitGroup
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		_, _ = fc.Data()
 	}()
 
-	// Immediately invalidate it while it's generating.
-	// Since there's no sleep, it's a race, but if invalidation wins or loses it must be coherent.
+	// Wait for generator to actually hold ownership
+	<-genStarted
+
+	// Issue invalidation while the generator holds ownership but hasn't returned
 	_ = fc.Invalidate()
 
-	// Wait a moment for async stuff to settle, though WaitGroups are better, a sleep guarantees race overlap
-	time.Sleep(10 * time.Millisecond)
+	// Unblock generator to commit
+	close(genWait)
 
-	// We expect the state to be safe (not crashed).
-	// We won't strictly verify exact call counts because it's a true race,
-	// but we ensure no panic and that we can still fetch safely.
-	_, _ = fc.Data()
+	// Wait for generator to finish
+	WaitWgWithTimeout(t, &wg)
+
+	// Given we invalidated during an active generation cycle, the epoch advanced.
+	// The generator's commit MUST have been rejected.
+	if fc.HasContent() {
+		t.Errorf("expected cache to be empty due to rejected stale commit, but got content")
+	}
+
+	// A new fetch should generate fresh content.
+	b, err := fc.Data()
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+	if b == nil || string(*b) != "stale content" {
+		t.Errorf("expected fresh generation, got %v", b)
+	}
+	if atomic.LoadInt32(&generateCalls) != 2 {
+		t.Errorf("expected 2 generate calls, got %d", atomic.LoadInt32(&generateCalls))
+	}
+}
+
+func TestContent_ReentrantGenerate(t *testing.T) {
+	var generateCalls int32
+	var fc Content[[]byte]
+
+	fc = NewContent[[]byte](
+		WithGenerator[[]byte](func() (*[]byte, error) {
+			atomic.AddInt32(&generateCalls, 1)
+
+			// Should not deadlock on re-entry during generation
+			b, err := fc.Data()
+			if err != nil {
+				t.Errorf("expected no error on re-entry, got %v", err)
+			}
+			if b != nil {
+				t.Errorf("expected nil cache during initial generation re-entry, got %v", string(*b))
+			}
+
+			val := []byte("content")
+			return &val, nil
+		}),
+	)
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = fc.Data()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// success
+	case <-time.After(1 * time.Second):
+		t.Fatalf("timed out due to deadlock")
+	}
+
+	if atomic.LoadInt32(&generateCalls) != 1 {
+		t.Errorf("expected 1 generate call, got %d", atomic.LoadInt32(&generateCalls))
+	}
+}
+
+func WaitWgWithTimeout(t *testing.T, wg *sync.WaitGroup) {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("test timed out waiting for goroutines")
+	}
 }

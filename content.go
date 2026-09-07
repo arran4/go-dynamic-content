@@ -137,9 +137,8 @@ type contentImpl[T any] struct {
 	onInvalidate func()
 	onClose      func()
 
-	epoch        uint64
-	generating   bool
-	genWait      chan struct{} // blocks concurrent callers during generation
+	epoch      uint64
+	generating bool
 }
 
 func NewContent[T any](opts ...Option[T]) Content[T] {
@@ -164,16 +163,18 @@ func (fc *contentImpl[T]) Data() (*T, error) {
 	for {
 		// 1. Snapshot state under lock
 		fc.mu.Lock()
-		if fc.generating {
-			waitChan := fc.genWait
-			fc.mu.Unlock()
-			<-waitChan
-			continue
-		}
-
 		val := fc.store.Get()
+		isGen := fc.generating
 		snapshotEpoch := fc.epoch
 		fc.mu.Unlock()
+
+		// If a generation is currently in flight, we don't block.
+		// Instead, we return the cached value (even if nil or stale).
+		// This prevents duplicate generation by concurrent callers (they just get the stale/nil value),
+		// and prevents a self-deadlock if the generator code itself calls Data() on re-entry.
+		if isGen {
+			return val, nil
+		}
 
 		// 2. Evaluate validity without lock
 		if val != nil && fc.isValid != nil {
@@ -184,7 +185,7 @@ func (fc *contentImpl[T]) Data() (*T, error) {
 				fc.mu.Lock()
 				// Only clear if the epoch hasn't changed (meaning no new generation/invalidation happened)
 				// and we still aren't generating.
-				if fc.epoch == snapshotEpoch && fc.store.Get() != nil {
+				if fc.epoch == snapshotEpoch && fc.store.Get() != nil && !fc.generating {
 					fc.store.Clear()
 					fc.epoch++
 					triggeredInvalidate = true
@@ -201,10 +202,9 @@ func (fc *contentImpl[T]) Data() (*T, error) {
 		// 3. Return valid value or take ownership of generation
 		fc.mu.Lock()
 		if fc.generating {
-			waitChan := fc.genWait
+			val := fc.store.Get()
 			fc.mu.Unlock()
-			<-waitChan
-			continue
+			return val, nil
 		}
 
 		if val := fc.store.Get(); val != nil {
@@ -214,16 +214,12 @@ func (fc *contentImpl[T]) Data() (*T, error) {
 
 		// Take ownership
 		fc.generating = true
-		waitChan := make(chan struct{})
-		fc.genWait = waitChan
 		myEpoch := fc.epoch
 		fc.mu.Unlock()
 
 		if fc.generate == nil {
 			fc.mu.Lock()
 			fc.generating = false
-			fc.genWait = nil
-			close(waitChan)
 			fc.mu.Unlock()
 			return nil, nil
 		}
@@ -244,8 +240,6 @@ func (fc *contentImpl[T]) Data() (*T, error) {
 					fc.epoch++
 				}
 				fc.generating = false
-				fc.genWait = nil
-				close(waitChan)
 				fc.mu.Unlock()
 			}()
 			genVal, genErr = fc.generate()
@@ -257,8 +251,7 @@ func (fc *contentImpl[T]) Data() (*T, error) {
 		}
 
 		// To prevent livelock, we return the successfully generated result
-		// without re-validating it in this operation. Waiters who were blocked
-		// will wake up, loop, and evaluate validity against the new epoch.
+		// without re-validating it in this operation.
 		if genErr != nil {
 			return nil, genErr
 		}
@@ -324,13 +317,16 @@ func (fc *contentImpl[T]) String() string {
 
 func (fc *contentImpl[T]) Error() error {
 	fc.mu.Lock()
-	defer fc.mu.Unlock()
+	val := fc.store.Get()
+	fc.mu.Unlock()
+
+	if val == nil {
+		return fmt.Errorf("no content available")
+	}
 
 	if fc.isValid != nil && !fc.isValid() {
 		return fmt.Errorf("content is invalid")
 	}
-	if fc.store.Get() == nil {
-		return fmt.Errorf("no content available")
-	}
+
 	return nil
 }
