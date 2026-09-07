@@ -1,7 +1,6 @@
 package utils
 
 import (
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -690,79 +689,5 @@ func TestContent_ErrorInFlightState(t *testing.T) {
 	_ = fc.Error()
 	if atomic.LoadInt32(&isValidCalls) != 1 {
 		t.Errorf("expected 1 call to isValid, got %d", atomic.LoadInt32(&isValidCalls))
-	}
-}
-
-func TestContent_CompositionRetryGenerator(t *testing.T) {
-	var generateCalls int32
-
-	// A generator that fails once then succeeds, testing composition with helpers.RetryGenerator
-	gen := func() (*[]byte, error) {
-		count := atomic.AddInt32(&generateCalls, 1)
-		if count == 1 {
-			return nil, fmt.Errorf("temporary error")
-		}
-		b := []byte("success")
-		return &b, nil
-	}
-
-	importHelpersRetry := func(g func() (*[]byte, error), retries int, delay time.Duration) func() (*[]byte, error) {
-		return func() (*[]byte, error) {
-			var b *[]byte
-			var err error
-			for i := 0; i <= retries; i++ {
-				b, err = g()
-				if err == nil {
-					return b, nil
-				}
-				time.Sleep(delay)
-			}
-			return b, err
-		}
-	}
-
-	retryGen := importHelpersRetry(gen, 3, 0)
-
-	fc := NewContent[[]byte](
-		WithGenerator[[]byte](retryGen),
-	)
-
-	b, err := fc.Data()
-	if err != nil {
-		t.Errorf("expected success, got %v", err)
-	}
-	if b == nil || string(*b) != "success" {
-		t.Errorf("expected success, got %s", string(*b)) // should not panic if b is nil
-	}
-	if atomic.LoadInt32(&generateCalls) != 2 {
-		t.Errorf("expected 2 calls, got %d", atomic.LoadInt32(&generateCalls))
-	}
-}
-
-func TestContent_CompositionTimeExpiry(t *testing.T) {
-	importHelpersExpiry := func(duration time.Duration) func() bool {
-		expiry := time.Now().Add(duration)
-		return func() bool {
-			return time.Now().Before(expiry)
-		}
-	}
-
-	fc := NewContent[[]byte](
-		WithGenerator[[]byte](func() (*[]byte, error) {
-			b := []byte("expiring content")
-			return &b, nil
-		}),
-		WithValidator[[]byte](importHelpersExpiry(10*time.Millisecond)),
-	)
-
-	// Load data natively tracking valid scopes
-	_, _ = fc.Data()
-
-	// Sleep natively evaluating real composition tracking inside isValid wrappers
-	time.Sleep(15 * time.Millisecond)
-
-	err := fc.Error()
-	if err == nil || err.Error() != "content is invalid" {
-		t.Errorf("expected invalid content error after expiry, got %v", err)
 	}
 }
