@@ -136,21 +136,140 @@ type contentImpl[T any] struct {
 	onGenerate   func(val *T, err error)
 	onInvalidate func()
 	onClose      func()
+}
 
+type versionedStore[T any] struct {
+	underlying Store[T]
 	epoch      uint64
-	generating bool
-	validating bool
+	mu         sync.Mutex
+}
+
+func (s *versionedStore[T]) Get() *T {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.underlying.Get()
+}
+
+func (s *versionedStore[T]) Set(val *T) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.underlying.Set(val)
+	s.epoch++
+}
+
+func (s *versionedStore[T]) Clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.underlying.Clear()
+	s.epoch++
+}
+
+func (s *versionedStore[T]) CurrentEpoch() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.epoch
+}
+
+func (s *versionedStore[T]) Commit(val *T, expectedEpoch uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.epoch == expectedEpoch {
+		s.underlying.Set(val)
+		s.epoch++
+		return true
+	}
+	return false
 }
 
 func NewContent[T any](opts ...Option[T]) Content[T] {
 	fc := &contentImpl[T]{
 		store: &MemoryStore[T]{},
 		lazy:  true,
-		epoch: 1, // Start at 1
 	}
 
 	for _, opt := range opts {
 		opt(fc)
+	}
+
+	vStore := &versionedStore[T]{
+		underlying: fc.store,
+		epoch:      1,
+	}
+	fc.store = vStore
+
+	// Capture execution policy in composable closures rather than fields
+	if fc.generate != nil {
+		origGen := fc.generate
+		origOnGen := fc.onGenerate
+
+		var genMu sync.Mutex
+		var generating bool
+
+		fc.generate = func() (*T, error) {
+			genMu.Lock()
+			if generating {
+				val := vStore.Get()
+				genMu.Unlock()
+				return val, nil
+			}
+			generating = true
+			myEpoch := vStore.CurrentEpoch()
+			genMu.Unlock()
+
+			var genVal *T
+			var genErr error
+			func() {
+				defer func() {
+					genMu.Lock()
+					generating = false
+					genMu.Unlock()
+					if r := recover(); r != nil {
+						panic(r)
+					}
+				}()
+				genVal, genErr = origGen()
+			}()
+
+			if genErr == nil && genVal != nil {
+				vStore.Commit(genVal, myEpoch)
+			}
+
+			if origOnGen != nil {
+				origOnGen(genVal, genErr)
+			}
+
+			return genVal, genErr
+		}
+	}
+
+	if fc.isValid != nil {
+		origIsVal := fc.isValid
+		var valMu sync.Mutex
+		var validating bool
+
+		fc.isValid = func() bool {
+			valMu.Lock()
+			if validating {
+				valMu.Unlock()
+				return true // Optimistic validity breaks recursion
+			}
+			validating = true
+			valMu.Unlock()
+
+			var valid bool
+			func() {
+				defer func() {
+					valMu.Lock()
+					validating = false
+					valMu.Unlock()
+					if r := recover(); r != nil {
+						panic(r)
+					}
+				}()
+				valid = origIsVal()
+			}()
+			return valid
+		}
 	}
 
 	if !fc.lazy {
@@ -161,140 +280,29 @@ func NewContent[T any](opts ...Option[T]) Content[T] {
 }
 
 func (fc *contentImpl[T]) Data() (*T, error) {
-	for {
-		// 1. Snapshot state under lock
-		fc.mu.Lock()
-		val := fc.store.Get()
-		isGen := fc.generating
-		isVal := fc.validating
-		snapshotEpoch := fc.epoch
-		fc.mu.Unlock()
-
-		// IN-FLIGHT CONCURRENCY STATE:
-		// If a generation is already active, or we are currently validating, we do not wait.
-		// We immediately return the currently committed cache state (which may be nil or stale).
-		// This mathematically prevents self-deadlocks on direct `generate -> Data()`
-		// and `isValid -> Data()` re-entry, while fulfilling the requirement that concurrent
-		// callers do not start uncontrolled duplicate generations.
-		if isGen || isVal {
-			return val, nil
-		}
-
-		// 2. Evaluate validity without lock
-		if val != nil && fc.isValid != nil {
-			fc.mu.Lock()
-			// Another goroutine might have started validating between our unlock and here.
-			if fc.validating {
-				fc.mu.Unlock()
-				return val, nil
-			}
-			fc.validating = true
-			fc.mu.Unlock()
-
-			var isValidPanic bool
-			var valid bool
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						isValidPanic = true
-						fc.mu.Lock()
-						fc.validating = false
-						fc.mu.Unlock()
-						panic(r)
-					}
-				}()
-				valid = fc.isValid()
-			}()
-
-			// We safely got past isValid without panicking
-			if !isValidPanic {
-				var triggeredInvalidate bool
-
-				fc.mu.Lock()
-				fc.validating = false
-				// Only clear if the epoch hasn't changed (meaning no new generation/invalidation happened)
-				// and we aren't currently generating.
-				if !valid && fc.epoch == snapshotEpoch && fc.store.Get() != nil && !fc.generating {
-					fc.store.Clear()
-					fc.epoch++
-					triggeredInvalidate = true
-				}
-				fc.mu.Unlock()
-
-				if triggeredInvalidate && fc.onInvalidate != nil {
-					fc.onInvalidate()
-				}
-
-				if !valid {
-					continue // start over since it was invalid
-				}
-			}
-		}
-
-		// 3. Return valid value or take ownership of generation
-		fc.mu.Lock()
-		if fc.generating {
-			val := fc.store.Get()
-			fc.mu.Unlock()
-			return val, nil
-		}
-
-		if val := fc.store.Get(); val != nil {
-			fc.mu.Unlock()
-			return val, nil
-		}
-
-		// Take ownership
-		fc.generating = true
-		myEpoch := fc.epoch
-		fc.mu.Unlock()
-
-		if fc.generate == nil {
-			fc.mu.Lock()
-			fc.generating = false
-			fc.mu.Unlock()
-			return nil, nil
-		}
-
-		// 4. Generate without lock, catching panics
-		var genVal *T
-		var genErr error
-
-		func() {
-			defer func() {
-				// Commit and release ownership
-				fc.mu.Lock()
-				// Only commit if epoch hasn't been advanced by Invalidate/Close
-				if fc.epoch == myEpoch {
-					if genErr == nil && genVal != nil {
-						fc.store.Set(genVal)
-					}
-					fc.epoch++
-				}
-				fc.generating = false
-				fc.mu.Unlock()
-			}()
-			genVal, genErr = fc.generate()
-		}()
-
-		// 5. Execute callback outside lock
-		if fc.onGenerate != nil {
-			fc.onGenerate(genVal, genErr)
-		}
-
-		// To prevent livelock, we return the successfully generated result
-		// without re-validating it in this operation.
-		if genErr != nil {
-			return nil, genErr
-		}
-		return genVal, nil
+	if fc.isValid != nil && !fc.isValid() {
+		// Invalidate() implicitly clears store via vStore which properly coordinates epoch.
+		_ = fc.Invalidate()
 	}
+
+	fc.mu.Lock()
+	val := fc.store.Get()
+	fc.mu.Unlock()
+
+	if val != nil {
+		return val, nil
+	}
+
+	if fc.generate == nil {
+		return nil, nil
+	}
+
+	return fc.generate()
 }
 
 func (fc *contentImpl[T]) Close() error {
 	fc.mu.Lock()
 	fc.store.Clear()
-	fc.epoch++
 	fc.mu.Unlock()
 
 	if fc.onClose != nil {
@@ -315,8 +323,10 @@ func (fc *contentImpl[T]) Invalidate() error {
 	if fc.store.Get() != nil {
 		fc.store.Clear()
 		triggeredInvalidate = true
+	} else {
+		// Even if empty, clear to advance the epoch so in-flight commits are rejected!
+		fc.store.Clear()
 	}
-	fc.epoch++
 	fc.mu.Unlock()
 
 	if triggeredInvalidate && fc.onInvalidate != nil {
@@ -348,67 +358,14 @@ func (fc *contentImpl[T]) String() string {
 }
 
 func (fc *contentImpl[T]) Error() error {
+	// 1. Evaluate validity first to preserve precedence (wrapper inherently resolves recursive locks natively)
+	if fc.isValid != nil && !fc.isValid() {
+		return fmt.Errorf("content is invalid")
+	}
+
+	// 2. Evaluate content presence
 	fc.mu.Lock()
 	val := fc.store.Get()
-	isGen := fc.generating
-	isVal := fc.validating
-	fc.mu.Unlock()
-
-	// IN-FLIGHT CONCURRENCY STATE:
-	// If generating or validating is actively in progress, we return the currently committed
-	// cache snapshot state. This deliberately assumes optimistic validity if content exists,
-	// securely breaking direct `isValid -> Error()` infinite recursion cycles without deadlocks,
-	// and providing a coherent non-blocking state to concurrent callers.
-	if isGen || isVal {
-		if val == nil {
-			return fmt.Errorf("no content available")
-		}
-		return nil
-	}
-
-	// 1. Evaluate validity first to preserve error precedence
-	if fc.isValid != nil {
-		fc.mu.Lock()
-		if fc.validating {
-			fc.mu.Unlock()
-			val = fc.store.Get()
-			if val == nil {
-				return fmt.Errorf("no content available")
-			}
-			return nil
-		}
-		fc.validating = true
-		fc.mu.Unlock()
-
-		var valid bool
-		var isValidPanic bool
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					isValidPanic = true
-					fc.mu.Lock()
-					fc.validating = false
-					fc.mu.Unlock()
-					panic(r)
-				}
-			}()
-			valid = fc.isValid()
-		}()
-
-		if !isValidPanic {
-			fc.mu.Lock()
-			fc.validating = false
-			fc.mu.Unlock()
-
-			if !valid {
-				return fmt.Errorf("content is invalid")
-			}
-		}
-	}
-
-	// 2. Evaluate content presence second
-	fc.mu.Lock()
-	val = fc.store.Get()
 	fc.mu.Unlock()
 
 	if val == nil {
