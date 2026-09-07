@@ -13,11 +13,25 @@ func testContentImpl(t *testing.T, fc Content[[]byte], generateCallsPtr *int) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			b, err := fc.Data()
+
+			// Non-blocking single-flight model means concurrent callers get nil or stale
+			// if generation is in-flight. To assert strong eventual consistency, we retry.
+			var b *[]byte
+			var err error
+			for j := 0; j < 50; j++ {
+				b, err = fc.Data()
+				if err != nil || b != nil {
+					break
+				}
+				time.Sleep(2 * time.Millisecond) // yield and try again
+			}
+
 			if err != nil {
 				t.Errorf("expected no error, got %v", err)
 			}
-			if b != nil && string(*b) != "hello world" {
+			if b == nil {
+				t.Errorf("expected non-nil data eventually")
+			} else if string(*b) != "hello world" {
 				t.Errorf("expected 'hello world', got '%s'", string(*b))
 			}
 		}()
@@ -481,7 +495,7 @@ func TestContent_ReentrantIsValid(t *testing.T) {
 	}
 }
 
-func TestContent_ConcurrentData_Blocking(t *testing.T) {
+func TestContent_ConcurrentData_InFlight(t *testing.T) {
 	var generateCalls int32
 
 	genStarted := make(chan struct{})
@@ -509,25 +523,47 @@ func TestContent_ConcurrentData_Blocking(t *testing.T) {
 	<-genStarted
 
 	var concurrentWg sync.WaitGroup
+	var hitWg sync.WaitGroup
 	var errorCount int32
+
+	hitWg.Add(50)
 
 	// Start concurrent callers while in-flight
 	for i := 0; i < 50; i++ {
 		concurrentWg.Add(1)
 		go func() {
 			defer concurrentWg.Done()
-			b, err := fc.Data()
-			if err != nil {
-				atomic.AddInt32(&errorCount, 1)
+
+			var b *[]byte
+			var err error
+
+			// Non-blocking wait loop asserting everyone gets it without re-generating
+			firstAttempt := true
+			for {
+				b, err = fc.Data()
+				if firstAttempt {
+					hitWg.Done()
+					firstAttempt = false
+				}
+				if err != nil {
+					atomic.AddInt32(&errorCount, 1)
+					return
+				}
+				if b != nil {
+					break // Successfully observed loaded cache state
+				}
+				time.Sleep(1 * time.Millisecond)
 			}
-			if b == nil || string(*b) != "concurrent content" {
+
+			if string(*b) != "concurrent content" {
 				atomic.AddInt32(&errorCount, 1)
 			}
 		}()
 	}
 
-	// Sleep briefly to guarantee concurrent callers are all actively waiting on genWait inside Data()
-	time.Sleep(50 * time.Millisecond)
+	// Synchronize without sleeps: wait until all 50 concurrent callers have hit Data()
+	// at least once, verifying they safely observed the in-flight state without deadlocking.
+	WaitWgWithTimeout(t, &hitWg)
 
 	// Release the generator
 	close(genWait)
@@ -542,5 +578,45 @@ func TestContent_ConcurrentData_Blocking(t *testing.T) {
 	}
 	if atomic.LoadInt32(&errorCount) != 0 {
 		t.Errorf("expected 0 errors and matching strings across concurrents, got %d misses", atomic.LoadInt32(&errorCount))
+	}
+}
+
+func TestContent_ReentrantGenerate(t *testing.T) {
+	var generateCalls int32
+	var fc Content[[]byte]
+
+	fc = NewContent[[]byte](
+		WithGenerator[[]byte](func() (*[]byte, error) {
+			atomic.AddInt32(&generateCalls, 1)
+
+			// Direct re-entry check: should return nil immediately, not deadlock
+			b, err := fc.Data()
+			if err != nil {
+				t.Errorf("expected no error on re-entry, got %v", err)
+			}
+			if b != nil {
+				t.Errorf("expected nil cache during initial generation re-entry, got %v", string(*b))
+			}
+
+			val := []byte("content")
+			return &val, nil
+		}),
+	)
+
+	done := make(chan struct{})
+	go func() {
+		_, _ = fc.Data()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// success
+	case <-time.After(1 * time.Second):
+		t.Fatalf("TestContent_ReentrantGenerate timed out (deadlock)")
+	}
+
+	if atomic.LoadInt32(&generateCalls) != 1 {
+		t.Errorf("expected 1 generate call, got %d", atomic.LoadInt32(&generateCalls))
 	}
 }
