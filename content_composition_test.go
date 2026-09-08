@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	utils "github.com/arran4/go-weak-content"
 	"github.com/arran4/go-weak-content/helpers"
@@ -47,13 +46,16 @@ func TestContent_CompositionRetryGenerator(t *testing.T) {
 }
 
 func TestContent_CompositionTimeExpiry(t *testing.T) {
+	// Construct the helper explicitly to verify it composes state through WithValidator
+	validator, _ := helpers.TimeExpiry(0)
+
 	fc := utils.NewContent[[]byte](
 		utils.WithGenerator[[]byte](func() (*[]byte, error) {
 			b := []byte("expiring content")
 			return &b, nil
 		}),
 		// Instant expiry composition validating state execution natively correctly without sleeps
-		utils.WithValidator[[]byte](func() bool { val, _ := helpers.TimeExpiry(-1 * time.Millisecond); return val() }),
+		utils.WithValidator[[]byte](validator),
 	)
 
 	// Load data natively tracking valid scopes
@@ -62,5 +64,45 @@ func TestContent_CompositionTimeExpiry(t *testing.T) {
 	err := fc.Error()
 	if err == nil || err.Error() != "content is invalid" {
 		t.Errorf("expected invalid content error after expiry, got %v", err)
+	}
+}
+
+func TestContent_CompositionDynamicGenerator(t *testing.T) {
+	dg := helpers.NewDynamicGenerator[[]byte](nil)
+
+	// Create Content wrapping dg.Generate
+	fc := utils.NewContent[[]byte](
+		utils.WithGenerator[[]byte](dg.Generate),
+	)
+
+	// Set first generator
+	dg.SetGenerator(func() (*[]byte, error) {
+		b := []byte("first content")
+		return &b, nil
+	})
+
+	b, err := fc.Data()
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+	if b == nil || string(*b) != "first content" {
+		t.Errorf("expected 'first content', got %s", string(*b))
+	}
+
+	// Switch the underlying dynamic generator
+	dg.SetGenerator(func() (*[]byte, error) {
+		b := []byte("second content")
+		return &b, nil
+	})
+
+	// Must explicitly invalidate to get new generation
+	_ = fc.Invalidate()
+
+	b, err = fc.Data()
+	if err != nil {
+		t.Errorf("expected no error, got %v", err)
+	}
+	if b == nil || string(*b) != "second content" {
+		t.Errorf("expected 'second content', got %s", string(*b))
 	}
 }

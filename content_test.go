@@ -271,7 +271,10 @@ func TestContent_InvalidationRacingGeneration(t *testing.T) {
 	fc := NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			atomic.AddInt32(&generateCalls, 1)
-			genStartedOnce.Do(func() { close(genStarted) })
+			genStartedOnce.Do(func() {
+				var genStartedOnce sync.Once
+				genStartedOnce.Do(func() { close(genStarted) })
+			})
 
 			// We only want to wait on genWait the first time.
 			// The second time (fresh generation), we just return.
@@ -506,8 +509,9 @@ func TestContent_ConcurrentData_InFlight(t *testing.T) {
 	fc := NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			atomic.AddInt32(&generateCalls, 1)
-			close(genStarted) // Signal that generation block has locked
-			<-genWait         // Keep generation artificially in-flight
+			var genStartedOnce sync.Once
+			genStartedOnce.Do(func() { close(genStarted) }) // Signal that generation block has locked
+			<-genWait                                       // Keep generation artificially in-flight
 			b := []byte("concurrent content")
 			return &b, nil
 		}),
