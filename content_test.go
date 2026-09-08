@@ -969,10 +969,10 @@ func TestContent_PartialValueWithGeneratorError(t *testing.T) {
 		}),
 	)
 
-	// First call should fail and not cache the partial value.
+	// First call should fail and not cache the partial value, but still return it to caller.
 	val, err := fc.Data()
-	if val != nil {
-		t.Errorf("expected nil value, got %v", *val)
+	if val == nil || *val != "partial value" {
+		t.Errorf("expected partial value, got %v", val)
 	}
 	if !errors.Is(err, expectedErr) {
 		t.Errorf("expected %v, got %v", expectedErr, err)
