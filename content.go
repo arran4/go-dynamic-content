@@ -138,6 +138,111 @@ type contentImpl[T any] struct {
 	onClose      func()
 }
 
+type versionedStore[T any] struct {
+	underlying Store[T]
+	epoch      uint64
+	mu         sync.Mutex
+}
+
+func (s *versionedStore[T]) Get() *T {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.underlying.Get()
+}
+
+func (s *versionedStore[T]) Set(val *T) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.underlying.Set(val)
+	s.epoch++
+}
+
+func (s *versionedStore[T]) Clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.underlying.Clear()
+	s.epoch++
+}
+
+type commitToken struct {
+	epoch uint64
+}
+
+func (s *versionedStore[T]) BeginCommit() commitToken {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return commitToken{epoch: s.epoch}
+}
+
+func (s *versionedStore[T]) CommitIfCurrent(token commitToken, val *T) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.epoch == token.epoch {
+		s.underlying.Set(val)
+		s.epoch++
+		return true
+	}
+	return false
+}
+
+func wrapGenerator[T any](store *versionedStore[T], origGen func() (*T, error), onGen func(val *T, err error)) func() (*T, error) {
+	var genMu sync.Mutex
+	var generating bool
+
+	return func() (*T, error) {
+		genMu.Lock()
+		if generating {
+			val := store.Get()
+			genMu.Unlock()
+			return val, nil
+		}
+		generating = true
+		token := store.BeginCommit()
+		genMu.Unlock()
+
+		defer func() {
+			genMu.Lock()
+			generating = false
+			genMu.Unlock()
+		}()
+
+		genVal, genErr := origGen()
+
+		if genErr == nil && genVal != nil {
+			store.CommitIfCurrent(token, genVal)
+		}
+
+		if onGen != nil {
+			onGen(genVal, genErr)
+		}
+
+		return genVal, genErr
+	}
+}
+
+func wrapValidator[T any](origIsVal func() bool) func() bool {
+	var valMu sync.Mutex
+	var validating bool
+
+	return func() bool {
+		valMu.Lock()
+		if validating {
+			valMu.Unlock()
+			return true // Optimistic validity breaks recursion
+		}
+		validating = true
+		valMu.Unlock()
+
+		defer func() {
+			valMu.Lock()
+			validating = false
+			valMu.Unlock()
+		}()
+
+		return origIsVal()
+	}
+}
+
 func NewContent[T any](opts ...Option[T]) Content[T] {
 	fc := &contentImpl[T]{
 		store: &MemoryStore[T]{},
@@ -148,62 +253,54 @@ func NewContent[T any](opts ...Option[T]) Content[T] {
 		opt(fc)
 	}
 
+	vStore := &versionedStore[T]{
+		underlying: fc.store,
+		epoch:      1,
+	}
+	fc.store = vStore
+
+	// Capture execution policy in composable private abstractions rather than fields
+	if fc.generate != nil {
+		fc.generate = wrapGenerator(vStore, fc.generate, fc.onGenerate)
+	}
+
+	if fc.isValid != nil {
+		fc.isValid = wrapValidator[T](fc.isValid)
+	}
+
 	if !fc.lazy {
-		_, _ = fc.load()
+		_, _ = fc.Data()
 	}
 
 	return fc
 }
 
-func (fc *contentImpl[T]) load() (*T, error) {
-	if fc.generate == nil {
-		return nil, nil // No generator provided, return nil or handle gracefully
-	}
-	val, err := fc.generate()
-
-	if fc.onGenerate != nil {
-		fc.onGenerate(val, err)
+func (fc *contentImpl[T]) Data() (*T, error) {
+	if fc.isValid != nil && !fc.isValid() {
+		// Invalidate() implicitly clears store via vStore which properly coordinates epoch.
+		_ = fc.Invalidate()
 	}
 
-	if err != nil {
-		return nil, err
-	}
+	fc.mu.Lock()
+	val := fc.store.Get()
+	fc.mu.Unlock()
 
 	if val != nil {
-		fc.store.Set(val)
-	}
-	return val, nil
-}
-
-func (fc *contentImpl[T]) Data() (*T, error) {
-	fc.mu.Lock()
-	defer fc.mu.Unlock()
-
-	if fc.isValid != nil && !fc.isValid() {
-		if fc.store.Get() != nil {
-			fc.store.Clear()
-			if fc.onInvalidate != nil {
-				fc.onInvalidate()
-			}
-		}
-	}
-
-	if val := fc.store.Get(); val != nil {
 		return val, nil
 	}
 
-	val, err := fc.load()
-	if err != nil {
-		return nil, err
+	if fc.generate == nil {
+		return nil, nil
 	}
 
-	return val, nil
+	return fc.generate()
 }
 
 func (fc *contentImpl[T]) Close() error {
 	fc.mu.Lock()
-	defer fc.mu.Unlock()
 	fc.store.Clear()
+	fc.mu.Unlock()
+
 	if fc.onClose != nil {
 		fc.onClose()
 	}
@@ -217,13 +314,19 @@ func (fc *contentImpl[T]) HasContent() bool {
 }
 
 func (fc *contentImpl[T]) Invalidate() error {
+	var triggeredInvalidate bool
 	fc.mu.Lock()
-	defer fc.mu.Unlock()
 	if fc.store.Get() != nil {
 		fc.store.Clear()
-		if fc.onInvalidate != nil {
-			fc.onInvalidate()
-		}
+		triggeredInvalidate = true
+	} else {
+		// Even if empty, clear to advance the epoch so in-flight commits are rejected!
+		fc.store.Clear()
+	}
+	fc.mu.Unlock()
+
+	if triggeredInvalidate && fc.onInvalidate != nil {
+		fc.onInvalidate()
 	}
 	return nil
 }
@@ -251,14 +354,19 @@ func (fc *contentImpl[T]) String() string {
 }
 
 func (fc *contentImpl[T]) Error() error {
-	fc.mu.Lock()
-	defer fc.mu.Unlock()
-
+	// 1. Evaluate validity first to preserve precedence (wrapper inherently resolves recursive locks natively)
 	if fc.isValid != nil && !fc.isValid() {
 		return fmt.Errorf("content is invalid")
 	}
-	if fc.store.Get() == nil {
+
+	// 2. Evaluate content presence
+	fc.mu.Lock()
+	val := fc.store.Get()
+	fc.mu.Unlock()
+
+	if val == nil {
 		return fmt.Errorf("no content available")
 	}
+
 	return nil
 }
