@@ -273,11 +273,7 @@ func wrapGenerator[T any](store *versionedStore[T], origGen func() (*T, error), 
 			return nil, fmt.Errorf("%w: %w", ErrNoContent, genErr)
 		}
 
-		if genErr != nil {
-			return nil, genErr
-		}
-
-		return genVal, nil
+		return genVal, genErr
 	}
 }
 

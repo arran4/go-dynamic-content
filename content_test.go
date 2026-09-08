@@ -952,3 +952,50 @@ func TestContent_ZeroValueIsLegitimate(t *testing.T) {
 		t.Errorf("expected nil error, got %v", err)
 	}
 }
+
+func TestContent_PartialValueWithGeneratorError(t *testing.T) {
+	callCount := 0
+	expectedErr := errors.New("generation failure with partial value")
+
+	fc := NewContent(
+		WithGenerator(func() (*string, error) {
+			callCount++
+			if callCount == 1 {
+				partial := "partial value"
+				return &partial, expectedErr
+			}
+			success := "success value"
+			return &success, nil
+		}),
+	)
+
+	// First call should fail and not cache the partial value.
+	val, err := fc.Data()
+	if val != nil {
+		t.Errorf("expected nil value, got %v", *val)
+	}
+	if !errors.Is(err, expectedErr) {
+		t.Errorf("expected %v, got %v", expectedErr, err)
+	}
+
+	// Error() should report the retained error.
+	err = fc.Error()
+	if !errors.Is(err, expectedErr) {
+		t.Errorf("expected Error() to return %v, got %v", expectedErr, err)
+	}
+
+	// Retry via Data(), should succeed and clear the error state.
+	val, err = fc.Data()
+	if err != nil {
+		t.Fatalf("expected successful Data(), got error: %v", err)
+	}
+	if val == nil || *val != "success value" {
+		t.Errorf("expected 'success value', got %v", val)
+	}
+
+	// Error() should now report nil error since it succeeded.
+	err = fc.Error()
+	if err != nil {
+		t.Errorf("expected nil error after successful generation, got %v", err)
+	}
+}
