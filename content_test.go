@@ -57,7 +57,8 @@ func testContentImpl(t *testing.T, fc Content[[]byte], generateCallsPtr *int) {
 
 func TestContent_LazyWeak(t *testing.T) {
 	generateCalls := 0
-	fc := NewContent[[]byte](WithGenerator[[]byte](func() (*[]byte, error) {
+	var fc Content[[]byte]
+	fc = NewContent[[]byte](WithGenerator[[]byte](func() (*[]byte, error) {
 		generateCalls++
 		b := []byte("hello world")
 		return &b, nil
@@ -67,7 +68,8 @@ func TestContent_LazyWeak(t *testing.T) {
 
 func TestContent_LazyMemory(t *testing.T) {
 	generateCalls := 0
-	fc := NewContent[[]byte](WithGenerator[[]byte](func() (*[]byte, error) {
+	var fc Content[[]byte]
+	fc = NewContent[[]byte](WithGenerator[[]byte](func() (*[]byte, error) {
 		generateCalls++
 		b := []byte("hello world")
 		return &b, nil
@@ -77,7 +79,8 @@ func TestContent_LazyMemory(t *testing.T) {
 
 func TestContent_EagerWeak(t *testing.T) {
 	generateCalls := 0
-	fc := NewContent[[]byte](WithGenerator[[]byte](func() (*[]byte, error) {
+	var fc Content[[]byte]
+	fc = NewContent[[]byte](WithGenerator[[]byte](func() (*[]byte, error) {
 		generateCalls++
 		b := []byte("hello world")
 		return &b, nil
@@ -87,7 +90,8 @@ func TestContent_EagerWeak(t *testing.T) {
 
 func TestContent_EagerMemory(t *testing.T) {
 	generateCalls := 0
-	fc := NewContent[[]byte](WithGenerator[[]byte](func() (*[]byte, error) {
+	var fc Content[[]byte]
+	fc = NewContent[[]byte](WithGenerator[[]byte](func() (*[]byte, error) {
 		generateCalls++
 		b := []byte("hello world")
 		return &b, nil
@@ -96,7 +100,8 @@ func TestContent_EagerMemory(t *testing.T) {
 }
 
 func TestContent_WithOptions(t *testing.T) {
-	fc := NewContent[[]byte](WithValue[[]byte]([]byte("hello bytes")))
+	var fc Content[[]byte]
+	fc = NewContent[[]byte](WithValue[[]byte]([]byte("hello bytes")))
 	if fc.String() != "hello bytes" {
 		t.Errorf("expected 'hello bytes', got '%s'", fc.String())
 	}
@@ -111,7 +116,8 @@ func TestContent_Validator(t *testing.T) {
 	generateCalls := 0
 	valid := true
 
-	fc := NewContent[[]byte](
+	var fc Content[[]byte]
+	fc = NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			generateCalls++
 			b := []byte("valid world")
@@ -166,7 +172,8 @@ func TestContent_Validator(t *testing.T) {
 }
 
 func TestContent_HasContentAndInvalidate(t *testing.T) {
-	fc := NewContent[[]byte](
+	var fc Content[[]byte]
+	fc = NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			b := []byte("content")
 			return &b, nil
@@ -193,7 +200,8 @@ func TestContent_Callbacks(t *testing.T) {
 	invalidateCalls := 0
 	closeCalls := 0
 
-	fc := NewContent[[]byte](
+	var fc Content[[]byte]
+	fc = NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			b := []byte("content")
 			return &b, nil
@@ -234,7 +242,8 @@ func TestContent_Callbacks(t *testing.T) {
 func TestContent_ValidatorFalseLivelock(t *testing.T) {
 	var generateCalls int32
 
-	fc := NewContent[[]byte](
+	var fc Content[[]byte]
+	fc = NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			atomic.AddInt32(&generateCalls, 1)
 			b := []byte("content")
@@ -268,7 +277,8 @@ func TestContent_InvalidationRacingGeneration(t *testing.T) {
 	genWait := make(chan struct{})
 	var genStartedOnce sync.Once
 
-	fc := NewContent[[]byte](
+	var fc Content[[]byte]
+	fc = NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			atomic.AddInt32(&generateCalls, 1)
 			genStartedOnce.Do(func() { close(genStarted) })
@@ -507,7 +517,8 @@ func TestContent_ConcurrentData_InFlight(t *testing.T) {
 	// across generator invocations.
 	var genStartedOnce sync.Once
 
-	fc := NewContent[[]byte](
+	var fc Content[[]byte]
+	fc = NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			atomic.AddInt32(&generateCalls, 1)
 			genStartedOnce.Do(func() { close(genStarted) }) // Signal that generation block has locked
@@ -674,7 +685,8 @@ func TestContent_ReentrantIsValidDirect(t *testing.T) {
 }
 
 func TestContent_ErrorPrecedence(t *testing.T) {
-	fc := NewContent[[]byte](
+	var fc Content[[]byte]
+	fc = NewContent[[]byte](
 		WithValidator[[]byte](func() bool {
 			return false
 		}),
@@ -688,7 +700,8 @@ func TestContent_ErrorPrecedence(t *testing.T) {
 
 func TestContent_ErrorInFlightState(t *testing.T) {
 	var isValidCalls int32
-	fc := NewContent[[]byte](
+	var fc Content[[]byte]
+	fc = NewContent[[]byte](
 		WithValidator[[]byte](func() bool {
 			atomic.AddInt32(&isValidCalls, 1)
 			return false
@@ -699,5 +712,33 @@ func TestContent_ErrorInFlightState(t *testing.T) {
 	_ = fc.Error()
 	if atomic.LoadInt32(&isValidCalls) != 1 {
 		t.Errorf("expected 1 call to isValid, got %d", atomic.LoadInt32(&isValidCalls))
+	}
+}
+
+func TestContent_ReentrantOnGenerateLifecycle(t *testing.T) {
+	var generateCalls int32
+
+	var fc Content[[]byte]
+	fc = NewContent[[]byte](
+		WithGenerator[[]byte](func() (*[]byte, error) {
+			atomic.AddInt32(&generateCalls, 1)
+			b := []byte("content")
+			return &b, nil
+		}),
+		WithOnGenerate[[]byte](func(val *[]byte, err error) {
+			// Because onGenerate happens while `generating == true`,
+			// calling Data() here will return the already-committed `val` (stale-while-revalidate),
+			// and importantly, it will NOT trigger another generation.
+			b, _ := fc.Data()
+			if b == nil || string(*b) != "content" {
+				t.Errorf("expected observed 'content', got %v", b)
+			}
+		}),
+	)
+
+	_, _ = fc.Data()
+
+	if atomic.LoadInt32(&generateCalls) != 1 {
+		t.Errorf("expected exactly 1 generation call, but onGenerate incorrectly became a second owner: got %d calls", atomic.LoadInt32(&generateCalls))
 	}
 }

@@ -200,19 +200,13 @@ func wrapGenerator[T any](store *versionedStore[T], origGen func() (*T, error), 
 		token := store.BeginCommit()
 		genMu.Unlock()
 
-		var genVal *T
-		var genErr error
-		func() {
-			defer func() {
-				genMu.Lock()
-				generating = false
-				genMu.Unlock()
-				if r := recover(); r != nil {
-					panic(r)
-				}
-			}()
-			genVal, genErr = origGen()
+		defer func() {
+			genMu.Lock()
+			generating = false
+			genMu.Unlock()
 		}()
+
+		genVal, genErr := origGen()
 
 		if genErr == nil && genVal != nil {
 			store.CommitIfCurrent(token, genVal)
@@ -239,19 +233,13 @@ func wrapValidator[T any](origIsVal func() bool) func() bool {
 		validating = true
 		valMu.Unlock()
 
-		var valid bool
-		func() {
-			defer func() {
-				valMu.Lock()
-				validating = false
-				valMu.Unlock()
-				if r := recover(); r != nil {
-					panic(r)
-				}
-			}()
-			valid = origIsVal()
+		defer func() {
+			valMu.Lock()
+			validating = false
+			valMu.Unlock()
 		}()
-		return valid
+
+		return origIsVal()
 	}
 }
 
