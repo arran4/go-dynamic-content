@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -20,13 +21,14 @@ func testContentImpl(t *testing.T, fc Content[[]byte], generateCallsPtr *int) {
 			var err error
 			for j := 0; j < 50; j++ {
 				b, err = fc.Data()
-				if err != nil || b != nil {
+				// With the new semantics, if it's in-flight and cache is empty, it returns ErrNoContent.
+				if b != nil || (err != nil && !errors.Is(err, ErrNoContent)) {
 					break
 				}
 				time.Sleep(2 * time.Millisecond) // yield and try again
 			}
 
-			if err != nil {
+			if err != nil && !errors.Is(err, ErrNoContent) { // wait, if it finally returned ErrNoContent because it timed out or is in flight, but here we expect it to eventually return non-nil.
 				t.Errorf("expected no error, got %v", err)
 			}
 			if b == nil {
@@ -557,7 +559,7 @@ func TestContent_ConcurrentData_InFlight(t *testing.T) {
 
 			// 1. Explicit in-flight read
 			b, err := fc.Data()
-			if err != nil {
+			if err != nil && err != ErrNoContent { // We expect ErrNoContent when in-flight and cache is empty
 				atomic.AddInt32(&errorCount, 1)
 			}
 			// Should be nil because it's an in-flight fetch and cache is empty
@@ -615,7 +617,7 @@ func TestContent_ReentrantGenerate(t *testing.T) {
 
 			// Direct re-entry check: should return nil immediately, not deadlock
 			b, err := fc.Data()
-			if err != nil {
+			if err != nil && err != ErrNoContent {
 				t.Errorf("expected no error on re-entry, got %v", err)
 			}
 			if b != nil {
@@ -741,5 +743,259 @@ func TestContent_ReentrantOnGenerateLifecycle(t *testing.T) {
 
 	if atomic.LoadInt32(&generateCalls) != 1 {
 		t.Errorf("expected exactly 1 generation call, but onGenerate incorrectly became a second owner: got %d calls", atomic.LoadInt32(&generateCalls))
+	}
+}
+
+func TestContent_EagerFailure_Error(t *testing.T) {
+	expectedErr := errors.New("eager failure")
+	fc := NewContent(
+		WithGenerator(func() (*string, error) {
+			return nil, expectedErr
+		}),
+		UseEagerLoading[string](true),
+	)
+
+	err := fc.Error()
+	if !errors.Is(err, ErrNoContent) {
+		t.Errorf("expected ErrNoContent, got %v", err)
+	}
+	if !errors.Is(err, expectedErr) {
+		t.Errorf("expected wrapped expectedErr, got %v", err)
+	}
+}
+
+func TestContent_EagerFailure_SuccessfulData(t *testing.T) {
+	callCount := 0
+	expectedErr := errors.New("eager failure")
+	fc := NewContent(
+		WithGenerator(func() (*string, error) {
+			callCount++
+			if callCount == 1 {
+				return nil, expectedErr
+			}
+			val := "success"
+			return &val, nil
+		}),
+		UseEagerLoading[string](true),
+	)
+
+	// Verify error state after eager failure
+	err := fc.Error()
+	if !errors.Is(err, ErrNoContent) || !errors.Is(err, expectedErr) {
+		t.Errorf("expected wrapped ErrNoContent and expectedErr, got %v", err)
+	}
+
+	// Retry via Data()
+	val, err := fc.Data()
+	if err != nil {
+		t.Fatalf("expected successful Data() call, got error: %v", err)
+	}
+	if val == nil || *val != "success" {
+		t.Errorf("expected 'success', got %v", val)
+	}
+}
+
+func TestContent_RepeatedGenerationFailure(t *testing.T) {
+	callCount := 0
+	expectedErr1 := errors.New("failure 1")
+	expectedErr2 := errors.New("failure 2")
+	fc := NewContent(
+		WithGenerator(func() (*string, error) {
+			callCount++
+			if callCount == 1 {
+				return nil, expectedErr1
+			}
+			return nil, expectedErr2
+		}),
+	)
+
+	// First call
+	_, err := fc.Data()
+	if !errors.Is(err, ErrNoContent) || !errors.Is(err, expectedErr1) {
+		t.Errorf("expected wrapped ErrNoContent and expectedErr1, got %v", err)
+	}
+
+	// Verify Error()
+	err = fc.Error()
+	if !errors.Is(err, expectedErr1) {
+		t.Errorf("expected Error() to return expectedErr1, got %v", err)
+	}
+
+	// Second call
+	_, err = fc.Data()
+	if !errors.Is(err, ErrNoContent) || !errors.Is(err, expectedErr2) {
+		t.Errorf("expected wrapped ErrNoContent and expectedErr2, got %v", err)
+	}
+
+	// Verify Error()
+	err = fc.Error()
+	if !errors.Is(err, expectedErr2) {
+		t.Errorf("expected Error() to return expectedErr2, got %v", err)
+	}
+}
+
+func TestContent_InvalidateClearsError(t *testing.T) {
+	callCount := 0
+	expectedErr := errors.New("generation error")
+	fc := NewContent(
+		WithGenerator(func() (*string, error) {
+			callCount++
+			if callCount == 1 {
+				return nil, expectedErr
+			}
+			val := "success"
+			return &val, nil
+		}),
+		UseEagerLoading[string](true),
+	)
+
+	// Verify error state after eager failure
+	err := fc.Error()
+	if !errors.Is(err, expectedErr) {
+		t.Errorf("expected expectedErr, got %v", err)
+	}
+
+	// Invalidate should clear the error
+	_ = fc.Invalidate()
+
+	// Error should now just be ErrNoContent, not wrapped expectedErr (or we can just check Data)
+	// Actually, Error() will trigger if we check.
+	// Wait, if generator is still there, Data() will run it again.
+	// If we just check Error() after Invalidate, it might still have the error unless Invalidate cleared it?
+	// Wait, Invalidate clears store. Clear() clears the error!
+	err = fc.Error()
+	if errors.Is(err, expectedErr) {
+		t.Errorf("expected expectedErr to be cleared, got %v", err)
+	}
+	if !errors.Is(err, ErrNoContent) {
+		t.Errorf("expected ErrNoContent, got %v", err)
+	}
+}
+
+func TestContent_ValidatorFailureOverridesGeneratorError(t *testing.T) {
+	expectedErr := errors.New("generation error")
+	fc := NewContent(
+		WithGenerator(func() (*string, error) {
+			return nil, expectedErr
+		}),
+		WithValidator[string](func() bool {
+			return false // Validator says invalid
+		}),
+		UseEagerLoading[string](true),
+	)
+
+	// Since validator fails, Error() should return ErrInvalidContent.
+	err := fc.Error()
+	if !errors.Is(err, ErrInvalidContent) {
+		t.Errorf("expected ErrInvalidContent, got %v", err)
+	}
+
+	// Data() should clear the invalid content (and epoch) via Invalidate, then try to generate.
+	// Since generator fails again, it will return the new error.
+	// Wait, if it fails validation, Invalidate is called.
+	_, err = fc.Data()
+	if !errors.Is(err, expectedErr) {
+		t.Errorf("expected wrapped expectedErr after regeneration, got %v", err)
+	}
+}
+
+func TestContent_GeneratorReturnsNilNil(t *testing.T) {
+	fc := NewContent(
+		WithGenerator(func() (*string, error) {
+			return nil, nil // Should be mapped to ErrNoContent
+		}),
+	)
+
+	_, err := fc.Data()
+	if !errors.Is(err, ErrNoContent) {
+		t.Errorf("expected ErrNoContent, got %v", err)
+	}
+
+	err = fc.Error()
+	if !errors.Is(err, ErrNoContent) {
+		t.Errorf("expected ErrNoContent from Error(), got %v", err)
+	}
+}
+
+func TestContent_NoGeneratorConfigured(t *testing.T) {
+	fc := NewContent[string]() // No generator
+
+	_, err := fc.Data()
+	if !errors.Is(err, ErrNoContent) {
+		t.Errorf("expected ErrNoContent, got %v", err)
+	}
+
+	err = fc.Error()
+	if !errors.Is(err, ErrNoContent) {
+		t.Errorf("expected ErrNoContent from Error(), got %v", err)
+	}
+}
+
+func TestContent_ZeroValueIsLegitimate(t *testing.T) {
+	fc := NewContent(
+		WithGenerator(func() (*int, error) {
+			val := 0 // Zero value
+			return &val, nil
+		}),
+	)
+
+	val, err := fc.Data()
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	if val == nil || *val != 0 {
+		t.Errorf("expected 0, got %v", val)
+	}
+
+	err = fc.Error()
+	if err != nil {
+		t.Errorf("expected nil error, got %v", err)
+	}
+}
+
+func TestContent_PartialValueWithGeneratorError(t *testing.T) {
+	callCount := 0
+	expectedErr := errors.New("generation failure with partial value")
+
+	fc := NewContent(
+		WithGenerator(func() (*string, error) {
+			callCount++
+			if callCount == 1 {
+				partial := "partial value"
+				return &partial, expectedErr
+			}
+			success := "success value"
+			return &success, nil
+		}),
+	)
+
+	// First call should fail and not cache the partial value, but still return it to caller.
+	val, err := fc.Data()
+	if val == nil || *val != "partial value" {
+		t.Errorf("expected partial value, got %v", val)
+	}
+	if !errors.Is(err, expectedErr) {
+		t.Errorf("expected %v, got %v", expectedErr, err)
+	}
+
+	// Error() should report the retained error.
+	err = fc.Error()
+	if !errors.Is(err, expectedErr) {
+		t.Errorf("expected Error() to return %v, got %v", expectedErr, err)
+	}
+
+	// Retry via Data(), should succeed and clear the error state.
+	val, err = fc.Data()
+	if err != nil {
+		t.Fatalf("expected successful Data(), got error: %v", err)
+	}
+	if val == nil || *val != "success value" {
+		t.Errorf("expected 'success value', got %v", val)
+	}
+
+	// Error() should now report nil error since it succeeded.
+	err = fc.Error()
+	if err != nil {
+		t.Errorf("expected nil error after successful generation, got %v", err)
 	}
 }
