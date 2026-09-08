@@ -1,17 +1,45 @@
 package utils
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"weak"
 )
 
+var (
+	// ErrNoContent is returned when content cannot be generated or is missing.
+	ErrNoContent = errors.New("no content available")
+
+	// ErrInvalidContent is returned when content has failed validation.
+	ErrInvalidContent = errors.New("content is invalid")
+)
+
+// Content provides thread-safe access to lazily or eagerly generated data.
 type Content[T any] interface {
+	// Data returns a non-nil pointer to the generated content, or an error.
+	// If a generator fails (e.g. during eager loading), the error is retained
+	// and returned here on subsequent calls. A generator that successfully
+	// returns (nil, nil) will be coerced to return (nil, ErrNoContent).
 	Data() (*T, error)
+
+	// Close clears the currently cached data from the underlying store and triggers the onClose callback.
 	Close() error
+
+	// String returns the generated content formatted as a string.
+	// It suppresses errors internally; if data generation fails, it returns an empty string.
 	String() string
+
+	// Error evaluates the current state of the content cache.
+	// It returns ErrInvalidContent if a configured validator fails.
+	// If the cache is empty, it returns ErrNoContent (potentially wrapping a retained generator error).
 	Error() error
+
+	// HasContent returns true if the underlying store holds a generated value.
 	HasContent() bool
+
+	// Invalidate explicitly clears the cached content (and any retained generation error)
+	// from the underlying store, and triggers the onInvalidate callback.
 	Invalidate() error
 }
 
@@ -141,6 +169,7 @@ type contentImpl[T any] struct {
 type versionedStore[T any] struct {
 	underlying Store[T]
 	epoch      uint64
+	lastErr    error
 	mu         sync.Mutex
 }
 
@@ -148,6 +177,12 @@ func (s *versionedStore[T]) Get() *T {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.underlying.Get()
+}
+
+func (s *versionedStore[T]) GetError() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastErr
 }
 
 func (s *versionedStore[T]) Set(val *T) {
@@ -161,6 +196,7 @@ func (s *versionedStore[T]) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.underlying.Clear()
+	s.lastErr = nil
 	s.epoch++
 }
 
@@ -174,11 +210,14 @@ func (s *versionedStore[T]) BeginCommit() commitToken {
 	return commitToken{epoch: s.epoch}
 }
 
-func (s *versionedStore[T]) CommitIfCurrent(token commitToken, val *T) bool {
+func (s *versionedStore[T]) CommitIfCurrent(token commitToken, val *T, err error) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.epoch == token.epoch {
-		s.underlying.Set(val)
+		if val != nil {
+			s.underlying.Set(val)
+		}
+		s.lastErr = err
 		s.epoch++
 		return true
 	}
@@ -193,7 +232,14 @@ func wrapGenerator[T any](store *versionedStore[T], origGen func() (*T, error), 
 		genMu.Lock()
 		if generating {
 			val := store.Get()
+			err := store.GetError()
 			genMu.Unlock()
+			if val == nil {
+				if err != nil && !errors.Is(err, ErrNoContent) {
+					return nil, fmt.Errorf("%w: %w", ErrNoContent, err)
+				}
+				return nil, ErrNoContent
+			}
 			return val, nil
 		}
 		generating = true
@@ -208,12 +254,18 @@ func wrapGenerator[T any](store *versionedStore[T], origGen func() (*T, error), 
 
 		genVal, genErr := origGen()
 
-		if genErr == nil && genVal != nil {
-			store.CommitIfCurrent(token, genVal)
+		if genErr == nil && genVal == nil {
+			genErr = ErrNoContent
 		}
+
+		store.CommitIfCurrent(token, genVal, genErr)
 
 		if onGen != nil {
 			onGen(genVal, genErr)
+		}
+
+		if genVal == nil && genErr != nil && !errors.Is(genErr, ErrNoContent) {
+			return nil, fmt.Errorf("%w: %w", ErrNoContent, genErr)
 		}
 
 		return genVal, genErr
@@ -290,7 +342,12 @@ func (fc *contentImpl[T]) Data() (*T, error) {
 	}
 
 	if fc.generate == nil {
-		return nil, nil
+		if errStore, ok := fc.store.(interface{ GetError() error }); ok {
+			if lastErr := errStore.GetError(); lastErr != nil {
+				return nil, fmt.Errorf("%w: %w", ErrNoContent, lastErr)
+			}
+		}
+		return nil, ErrNoContent
 	}
 
 	return fc.generate()
@@ -356,7 +413,7 @@ func (fc *contentImpl[T]) String() string {
 func (fc *contentImpl[T]) Error() error {
 	// 1. Evaluate validity first to preserve precedence (wrapper inherently resolves recursive locks natively)
 	if fc.isValid != nil && !fc.isValid() {
-		return fmt.Errorf("content is invalid")
+		return ErrInvalidContent
 	}
 
 	// 2. Evaluate content presence
@@ -365,7 +422,12 @@ func (fc *contentImpl[T]) Error() error {
 	fc.mu.Unlock()
 
 	if val == nil {
-		return fmt.Errorf("no content available")
+		if errStore, ok := fc.store.(interface{ GetError() error }); ok {
+			if lastErr := errStore.GetError(); lastErr != nil {
+				return fmt.Errorf("%w: %w", ErrNoContent, lastErr)
+			}
+		}
+		return ErrNoContent
 	}
 
 	return nil

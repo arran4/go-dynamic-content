@@ -106,12 +106,16 @@ func main() {
 
 ### `Content[T any]`
 The `Content` interface represents the core of the library, providing methods to interact with cached content:
-- **`Data() (*T, error)`**: Returns a pointer to the value containing the generated content. If the content hasn't been generated yet (lazy loading), it will generate it.
+- **`Data() (*T, error)`**: Returns a non-nil pointer to the value containing the generated content, or an error. If the content hasn't been generated yet (lazy loading), it will generate it. If generation fails (even during eager loading), the error is retained and returned on subsequent calls. A generator returning `(nil, nil)` is coerced into returning `(nil, ErrNoContent)`.
 - **`Close() error`**: Clears the currently cached data from the underlying store and triggers the `onClose` callback if set.
 - **`String() string`**: A convenience method that returns the generated content as a string. Suppresses errors and returns an empty string if data generation fails. If the type is `string`, `[]byte`, or `fmt.Stringer`, it will natively format it.
-- **`Error() error`**: Evaluates whether the content state is currently valid. Returns `nil` if valid, or an error detailing why it is invalid (e.g., failed validation check or missing content).
+- **`Error() error`**: Evaluates whether the content state is currently valid. Returns `ErrInvalidContent` if a configured validator fails. If the cache is empty, it returns `ErrNoContent` (potentially wrapping a retained generator error).
 - **`HasContent() bool`**: Returns true if the underlying store currently holds a generated value.
-- **`Invalidate() error`**: Explicitly clears the cached content from the underlying store and triggers the `onInvalidate` callback if set.
+- **`Invalidate() error`**: Explicitly clears the cached content (and any retained generation error) from the underlying store and triggers the `onInvalidate` callback if set.
+
+### Sentinel Errors
+- **`ErrNoContent`**: Returned when the content cache is empty (e.g., generator not configured, returned nil, or an error occurred during generation).
+- **`ErrInvalidContent`**: Returned when the currently cached content is deemed invalid by the configured validator function.
 
 ### Storage Interfaces
 - **`Store[T any]`**: The interface defining how objects are stored and retrieved (`Get()`, `Set()`, `Clear()`).
