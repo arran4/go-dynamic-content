@@ -57,8 +57,8 @@ func testContentImpl(t *testing.T, fc Content[[]byte], generateCallsPtr *int) {
 
 func TestContent_LazyWeak(t *testing.T) {
 	generateCalls := 0
-	var fc Content[[]byte]
-	fc = NewContent[[]byte](WithGenerator[[]byte](func() (*[]byte, error) {
+
+	fc := NewContent[[]byte](WithGenerator[[]byte](func() (*[]byte, error) {
 		generateCalls++
 		b := []byte("hello world")
 		return &b, nil
@@ -68,8 +68,8 @@ func TestContent_LazyWeak(t *testing.T) {
 
 func TestContent_LazyMemory(t *testing.T) {
 	generateCalls := 0
-	var fc Content[[]byte]
-	fc = NewContent[[]byte](WithGenerator[[]byte](func() (*[]byte, error) {
+
+	fc := NewContent[[]byte](WithGenerator[[]byte](func() (*[]byte, error) {
 		generateCalls++
 		b := []byte("hello world")
 		return &b, nil
@@ -79,8 +79,8 @@ func TestContent_LazyMemory(t *testing.T) {
 
 func TestContent_EagerWeak(t *testing.T) {
 	generateCalls := 0
-	var fc Content[[]byte]
-	fc = NewContent[[]byte](WithGenerator[[]byte](func() (*[]byte, error) {
+
+	fc := NewContent[[]byte](WithGenerator[[]byte](func() (*[]byte, error) {
 		generateCalls++
 		b := []byte("hello world")
 		return &b, nil
@@ -90,8 +90,8 @@ func TestContent_EagerWeak(t *testing.T) {
 
 func TestContent_EagerMemory(t *testing.T) {
 	generateCalls := 0
-	var fc Content[[]byte]
-	fc = NewContent[[]byte](WithGenerator[[]byte](func() (*[]byte, error) {
+
+	fc := NewContent[[]byte](WithGenerator[[]byte](func() (*[]byte, error) {
 		generateCalls++
 		b := []byte("hello world")
 		return &b, nil
@@ -100,8 +100,8 @@ func TestContent_EagerMemory(t *testing.T) {
 }
 
 func TestContent_WithOptions(t *testing.T) {
-	var fc Content[[]byte]
-	fc = NewContent[[]byte](WithValue[[]byte]([]byte("hello bytes")))
+
+	fc := NewContent[[]byte](WithValue[[]byte]([]byte("hello bytes")))
 	if fc.String() != "hello bytes" {
 		t.Errorf("expected 'hello bytes', got '%s'", fc.String())
 	}
@@ -116,8 +116,7 @@ func TestContent_Validator(t *testing.T) {
 	generateCalls := 0
 	valid := true
 
-	var fc Content[[]byte]
-	fc = NewContent[[]byte](
+	fc := NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			generateCalls++
 			b := []byte("valid world")
@@ -172,8 +171,8 @@ func TestContent_Validator(t *testing.T) {
 }
 
 func TestContent_HasContentAndInvalidate(t *testing.T) {
-	var fc Content[[]byte]
-	fc = NewContent[[]byte](
+
+	fc := NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			b := []byte("content")
 			return &b, nil
@@ -200,8 +199,7 @@ func TestContent_Callbacks(t *testing.T) {
 	invalidateCalls := 0
 	closeCalls := 0
 
-	var fc Content[[]byte]
-	fc = NewContent[[]byte](
+	fc := NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			b := []byte("content")
 			return &b, nil
@@ -242,8 +240,7 @@ func TestContent_Callbacks(t *testing.T) {
 func TestContent_ValidatorFalseLivelock(t *testing.T) {
 	var generateCalls int32
 
-	var fc Content[[]byte]
-	fc = NewContent[[]byte](
+	fc := NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			atomic.AddInt32(&generateCalls, 1)
 			b := []byte("content")
@@ -277,8 +274,7 @@ func TestContent_InvalidationRacingGeneration(t *testing.T) {
 	genWait := make(chan struct{})
 	var genStartedOnce sync.Once
 
-	var fc Content[[]byte]
-	fc = NewContent[[]byte](
+	fc := NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			atomic.AddInt32(&generateCalls, 1)
 			genStartedOnce.Do(func() { close(genStarted) })
@@ -350,8 +346,10 @@ func WaitWgWithTimeout(t *testing.T, wg *sync.WaitGroup) {
 }
 
 func TestContent_ReentrantOnGenerate(t *testing.T) {
-	var fc Content[[]byte]
+
 	var generateCalls int32
+
+	var fc Content[[]byte]
 	fc = NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			b := []byte("content")
@@ -384,10 +382,11 @@ func TestContent_ReentrantOnGenerate(t *testing.T) {
 }
 
 func TestContent_ReentrantOnInvalidate(t *testing.T) {
-	var fc Content[[]byte]
+
 	var generateCalls int32
 	var invalidateCalls int32
 
+	var fc Content[[]byte]
 	fc = NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			atomic.AddInt32(&generateCalls, 1)
@@ -427,8 +426,10 @@ func TestContent_ReentrantOnInvalidate(t *testing.T) {
 }
 
 func TestContent_ReentrantOnClose(t *testing.T) {
-	var fc Content[[]byte]
+
 	var closeCalls int32
+
+	var fc Content[[]byte]
 	fc = NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			b := []byte("content")
@@ -461,10 +462,11 @@ func TestContent_ReentrantOnClose(t *testing.T) {
 }
 
 func TestContent_ReentrantIsValid(t *testing.T) {
-	var fc Content[[]byte]
+
 	var generateCalls int32
 	var isValidCalls int32
 
+	var fc Content[[]byte]
 	fc = NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			atomic.AddInt32(&generateCalls, 1)
@@ -517,8 +519,7 @@ func TestContent_ConcurrentData_InFlight(t *testing.T) {
 	// across generator invocations.
 	var genStartedOnce sync.Once
 
-	var fc Content[[]byte]
-	fc = NewContent[[]byte](
+	fc := NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			atomic.AddInt32(&generateCalls, 1)
 			genStartedOnce.Do(func() { close(genStarted) }) // Signal that generation block has locked
@@ -606,8 +607,8 @@ func TestContent_ConcurrentData_InFlight(t *testing.T) {
 
 func TestContent_ReentrantGenerate(t *testing.T) {
 	var generateCalls int32
-	var fc Content[[]byte]
 
+	var fc Content[[]byte]
 	fc = NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			atomic.AddInt32(&generateCalls, 1)
@@ -647,8 +648,8 @@ func TestContent_ReentrantGenerate(t *testing.T) {
 func TestContent_ReentrantIsValidDirect(t *testing.T) {
 	var generateCalls int32
 	var isValidCalls int32
-	var fc Content[[]byte]
 
+	var fc Content[[]byte]
 	fc = NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			atomic.AddInt32(&generateCalls, 1)
@@ -685,8 +686,8 @@ func TestContent_ReentrantIsValidDirect(t *testing.T) {
 }
 
 func TestContent_ErrorPrecedence(t *testing.T) {
-	var fc Content[[]byte]
-	fc = NewContent[[]byte](
+
+	fc := NewContent[[]byte](
 		WithValidator[[]byte](func() bool {
 			return false
 		}),
@@ -700,8 +701,8 @@ func TestContent_ErrorPrecedence(t *testing.T) {
 
 func TestContent_ErrorInFlightState(t *testing.T) {
 	var isValidCalls int32
-	var fc Content[[]byte]
-	fc = NewContent[[]byte](
+
+	fc := NewContent[[]byte](
 		WithValidator[[]byte](func() bool {
 			atomic.AddInt32(&isValidCalls, 1)
 			return false
