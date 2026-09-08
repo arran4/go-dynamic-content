@@ -19,8 +19,9 @@ var (
 type Content[T any] interface {
 	// Data returns a non-nil pointer to the generated content, or an error.
 	// If a generator fails (e.g. during eager loading), the error is retained
-	// and returned here on subsequent calls. A generator that successfully
-	// returns (nil, nil) will be coerced to return (nil, ErrNoContent).
+	// for inspection via Error(), while later Data() calls will retry generation.
+	// A successful generation clears the retained error.
+	// A generator that successfully returns (nil, nil) will be coerced to return (nil, ErrNoContent).
 	Data() (*T, error)
 
 	// Close clears the currently cached data from the underlying store and triggers the onClose callback.

@@ -106,7 +106,7 @@ func main() {
 
 ### `Content[T any]`
 The `Content` interface represents the core of the library, providing methods to interact with cached content:
-- **`Data() (*T, error)`**: Returns a non-nil pointer to the value containing the generated content, or an error. If the content hasn't been generated yet (lazy loading), it will generate it. If generation fails (even during eager loading), the error is retained and returned on subsequent calls. A generator returning `(nil, nil)` is coerced into returning `(nil, ErrNoContent)`.
+- **`Data() (*T, error)`**: Returns a non-nil pointer to the value containing the generated content, or an error. If the content hasn't been generated yet (lazy loading), it will generate it. If generation fails (even during eager loading), the error is retained for inspection via `Error()`. Subsequent `Data()` calls will retry generation, and a successful retry will clear the retained error. A generator returning `(nil, nil)` is coerced into returning `(nil, ErrNoContent)`.
 - **`Close() error`**: Clears the currently cached data from the underlying store and triggers the `onClose` callback if set.
 - **`String() string`**: A convenience method that returns the generated content as a string. Suppresses errors and returns an empty string if data generation fails. If the type is `string`, `[]byte`, or `fmt.Stringer`, it will natively format it.
 - **`Error() error`**: Evaluates whether the content state is currently valid. Returns `ErrInvalidContent` if a configured validator fails. If the cache is empty, it returns `ErrNoContent` (potentially wrapping a retained generator error).
