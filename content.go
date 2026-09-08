@@ -164,21 +164,95 @@ func (s *versionedStore[T]) Clear() {
 	s.epoch++
 }
 
-func (s *versionedStore[T]) CurrentEpoch() uint64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.epoch
+type commitToken struct {
+	epoch uint64
 }
 
-func (s *versionedStore[T]) Commit(val *T, expectedEpoch uint64) bool {
+func (s *versionedStore[T]) BeginCommit() commitToken {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.epoch == expectedEpoch {
+	return commitToken{epoch: s.epoch}
+}
+
+func (s *versionedStore[T]) CommitIfCurrent(token commitToken, val *T) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.epoch == token.epoch {
 		s.underlying.Set(val)
 		s.epoch++
 		return true
 	}
 	return false
+}
+
+func wrapGenerator[T any](store *versionedStore[T], origGen func() (*T, error), onGen func(val *T, err error)) func() (*T, error) {
+	var genMu sync.Mutex
+	var generating bool
+
+	return func() (*T, error) {
+		genMu.Lock()
+		if generating {
+			val := store.Get()
+			genMu.Unlock()
+			return val, nil
+		}
+		generating = true
+		token := store.BeginCommit()
+		genMu.Unlock()
+
+		var genVal *T
+		var genErr error
+		func() {
+			defer func() {
+				genMu.Lock()
+				generating = false
+				genMu.Unlock()
+				if r := recover(); r != nil {
+					panic(r)
+				}
+			}()
+			genVal, genErr = origGen()
+		}()
+
+		if genErr == nil && genVal != nil {
+			store.CommitIfCurrent(token, genVal)
+		}
+
+		if onGen != nil {
+			onGen(genVal, genErr)
+		}
+
+		return genVal, genErr
+	}
+}
+
+func wrapValidator[T any](origIsVal func() bool) func() bool {
+	var valMu sync.Mutex
+	var validating bool
+
+	return func() bool {
+		valMu.Lock()
+		if validating {
+			valMu.Unlock()
+			return true // Optimistic validity breaks recursion
+		}
+		validating = true
+		valMu.Unlock()
+
+		var valid bool
+		func() {
+			defer func() {
+				valMu.Lock()
+				validating = false
+				valMu.Unlock()
+				if r := recover(); r != nil {
+					panic(r)
+				}
+			}()
+			valid = origIsVal()
+		}()
+		return valid
+	}
 }
 
 func NewContent[T any](opts ...Option[T]) Content[T] {
@@ -197,79 +271,13 @@ func NewContent[T any](opts ...Option[T]) Content[T] {
 	}
 	fc.store = vStore
 
-	// Capture execution policy in composable closures rather than fields
+	// Capture execution policy in composable private abstractions rather than fields
 	if fc.generate != nil {
-		origGen := fc.generate
-		origOnGen := fc.onGenerate
-
-		var genMu sync.Mutex
-		var generating bool
-
-		fc.generate = func() (*T, error) {
-			genMu.Lock()
-			if generating {
-				val := vStore.Get()
-				genMu.Unlock()
-				return val, nil
-			}
-			generating = true
-			myEpoch := vStore.CurrentEpoch()
-			genMu.Unlock()
-
-			var genVal *T
-			var genErr error
-			func() {
-				defer func() {
-					genMu.Lock()
-					generating = false
-					genMu.Unlock()
-					if r := recover(); r != nil {
-						panic(r)
-					}
-				}()
-				genVal, genErr = origGen()
-			}()
-
-			if genErr == nil && genVal != nil {
-				vStore.Commit(genVal, myEpoch)
-			}
-
-			if origOnGen != nil {
-				origOnGen(genVal, genErr)
-			}
-
-			return genVal, genErr
-		}
+		fc.generate = wrapGenerator(vStore, fc.generate, fc.onGenerate)
 	}
 
 	if fc.isValid != nil {
-		origIsVal := fc.isValid
-		var valMu sync.Mutex
-		var validating bool
-
-		fc.isValid = func() bool {
-			valMu.Lock()
-			if validating {
-				valMu.Unlock()
-				return true // Optimistic validity breaks recursion
-			}
-			validating = true
-			valMu.Unlock()
-
-			var valid bool
-			func() {
-				defer func() {
-					valMu.Lock()
-					validating = false
-					valMu.Unlock()
-					if r := recover(); r != nil {
-						panic(r)
-					}
-				}()
-				valid = origIsVal()
-			}()
-			return valid
-		}
+		fc.isValid = wrapValidator[T](fc.isValid)
 	}
 
 	if !fc.lazy {
