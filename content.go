@@ -91,7 +91,11 @@ type Option[T any] func(*contentImpl[T])
 func UseWeakStorage[T any](use bool) Option[T] {
 	return func(fc *contentImpl[T]) {
 		if use {
+			val := fc.store.Get()
 			fc.store = &WeakStore[T]{}
+			if val != nil {
+				fc.store.Set(val)
+			}
 		}
 	}
 }
@@ -99,7 +103,11 @@ func UseWeakStorage[T any](use bool) Option[T] {
 func UseMemoryStorage[T any](use bool) Option[T] {
 	return func(fc *contentImpl[T]) {
 		if use {
+			val := fc.store.Get()
 			fc.store = &MemoryStore[T]{}
+			if val != nil {
+				fc.store.Set(val)
+			}
 		}
 	}
 }
