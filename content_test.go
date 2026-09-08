@@ -271,10 +271,7 @@ func TestContent_InvalidationRacingGeneration(t *testing.T) {
 	fc := NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			atomic.AddInt32(&generateCalls, 1)
-			genStartedOnce.Do(func() {
-				var genStartedOnce sync.Once
-				genStartedOnce.Do(func() { close(genStarted) })
-			})
+			genStartedOnce.Do(func() { close(genStarted) })
 
 			// We only want to wait on genWait the first time.
 			// The second time (fresh generation), we just return.
@@ -506,10 +503,13 @@ func TestContent_ConcurrentData_InFlight(t *testing.T) {
 	genStarted := make(chan struct{})
 	genWait := make(chan struct{})
 
+	// Ensure we only close genStarted once. We place it here so it lives
+	// across generator invocations.
+	var genStartedOnce sync.Once
+
 	fc := NewContent[[]byte](
 		WithGenerator[[]byte](func() (*[]byte, error) {
 			atomic.AddInt32(&generateCalls, 1)
-			var genStartedOnce sync.Once
 			genStartedOnce.Do(func() { close(genStarted) }) // Signal that generation block has locked
 			<-genWait                                       // Keep generation artificially in-flight
 			b := []byte("concurrent content")
@@ -528,40 +528,41 @@ func TestContent_ConcurrentData_InFlight(t *testing.T) {
 	// Ensure the generator owns the process before starting concurrents
 	<-genStarted
 
-	var concurrentWg sync.WaitGroup
-	var hitWg sync.WaitGroup
+	var concurrentFirstReadWg sync.WaitGroup
+	var concurrentSecondReadWg sync.WaitGroup
 	var errorCount int32
 
-	hitWg.Add(50)
+	concurrentFirstReadWg.Add(50)
+	concurrentSecondReadWg.Add(50)
+
+	// Create a channel to signal concurrent callers that the generator has committed
+	genCommitted := make(chan struct{})
 
 	// Start concurrent callers while in-flight
 	for i := 0; i < 50; i++ {
-		concurrentWg.Add(1)
 		go func() {
-			defer concurrentWg.Done()
+			defer concurrentSecondReadWg.Done()
 
-			var b *[]byte
-			var err error
-
-			// Non-blocking wait loop asserting everyone gets it without re-generating
-			firstAttempt := true
-			for {
-				b, err = fc.Data()
-				if firstAttempt {
-					hitWg.Done()
-					firstAttempt = false
-				}
-				if err != nil {
-					atomic.AddInt32(&errorCount, 1)
-					return
-				}
-				if b != nil {
-					break // Successfully observed loaded cache state
-				}
-				time.Sleep(1 * time.Millisecond)
+			// 1. Explicit in-flight read
+			b, err := fc.Data()
+			if err != nil {
+				atomic.AddInt32(&errorCount, 1)
 			}
+			// Should be nil because it's an in-flight fetch and cache is empty
+			if b != nil {
+				atomic.AddInt32(&errorCount, 1)
+			}
+			concurrentFirstReadWg.Done()
 
-			if string(*b) != "concurrent content" {
+			// 2. Wait for generator to finish explicitly using channels instead of sleeps
+			<-genCommitted
+
+			// 3. Second read should get the committed value
+			b2, err2 := fc.Data()
+			if err2 != nil {
+				atomic.AddInt32(&errorCount, 1)
+			}
+			if b2 == nil || string(*b2) != "concurrent content" {
 				atomic.AddInt32(&errorCount, 1)
 			}
 		}()
@@ -569,14 +570,19 @@ func TestContent_ConcurrentData_InFlight(t *testing.T) {
 
 	// Synchronize without sleeps: wait until all 50 concurrent callers have hit Data()
 	// at least once, verifying they safely observed the in-flight state without deadlocking.
-	WaitWgWithTimeout(t, &hitWg)
+	WaitWgWithTimeout(t, &concurrentFirstReadWg)
 
 	// Release the generator
 	close(genWait)
 
-	// Ensure everyone finishes gracefully
-	WaitWgWithTimeout(t, &concurrentWg)
+	// Wait for the initial generator to securely finish and commit
 	WaitWgWithTimeout(t, &initWg)
+
+	// Signal to all concurrent callers that they can now do their second read
+	close(genCommitted)
+
+	// Ensure everyone finishes gracefully
+	WaitWgWithTimeout(t, &concurrentSecondReadWg)
 
 	// Verify behavior
 	if atomic.LoadInt32(&generateCalls) != 1 {

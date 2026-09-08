@@ -85,7 +85,9 @@ func TestContent_CompositionDynamicGenerator(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}
-	if b == nil || string(*b) != "first content" {
+	if b == nil {
+		t.Errorf("expected first content but cache returned nil")
+	} else if string(*b) != "first content" {
 		t.Errorf("expected 'first content', got %s", string(*b))
 	}
 
@@ -102,7 +104,9 @@ func TestContent_CompositionDynamicGenerator(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected no error, got %v", err)
 	}
-	if b == nil || string(*b) != "second content" {
+	if b == nil {
+		t.Errorf("expected second content but cache returned nil")
+	} else if string(*b) != "second content" {
 		t.Errorf("expected 'second content', got %s", string(*b))
 	}
 }
