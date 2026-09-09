@@ -169,6 +169,22 @@ func TestContent_StorageOptionOrdering_Weak(t *testing.T) {
 	if fc.String() != "" {
 		t.Errorf("expected value to be GC'd under weak storage, got '%s'", fc.String())
 	}
+
+	// WeakStorage then WithValue -> should retain value initially, but allow GC
+	fc2 := NewContent[string](
+		UseWeakStorage[string](true),
+		WithValue[string]("hello weak 2"),
+	)
+
+	if fc2.String() != "hello weak 2" {
+		t.Errorf("expected 'hello weak 2' initially, got '%s'", fc2.String())
+	}
+
+	// Since no strong references to the string should exist, GC should collect it
+	runtime.GC()
+	if fc2.String() != "" {
+		t.Errorf("expected value to be GC'd under weak storage, got '%s'", fc2.String())
+	}
 }
 
 func TestContent_WithOptions(t *testing.T) {
