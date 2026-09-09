@@ -127,6 +127,10 @@ func TestContent_StorageOptionOrdering_Conflicting(t *testing.T) {
 	fc1 := NewContent[string](
 		WithValue[string]("hello conflict 1"),
 		UseWeakStorage[string](true),
+		// Force GC during intermediate state
+		func(fc *contentImpl[string]) {
+			runtime.GC()
+		},
 		UseMemoryStorage[string](true),
 	)
 	if fc1.String() != "hello conflict 1" {
