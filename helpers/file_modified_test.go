@@ -51,3 +51,59 @@ func TestFileModified(t *testing.T) {
 		t.Error("expected validator to return false after file is deleted")
 	}
 }
+
+func TestFileModified_Concurrent(t *testing.T) {
+	tempDir := t.TempDir()
+	tempFile := filepath.Join(tempDir, "test_concurrent.txt")
+
+	err := os.WriteFile(tempFile, []byte("initial"), 0644)
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+
+	isValid, reset := FileModified(tempFile)
+
+	stop := make(chan struct{})
+
+	// Start goroutine validating constantly
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				isValid()
+			}
+		}
+	}()
+
+	// Start goroutine resetting constantly
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				reset()
+			}
+		}
+	}()
+
+	// Start goroutine modifying file constantly
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				now := time.Now()
+				_ = os.Chtimes(tempFile, now, now)
+				time.Sleep(1 * time.Millisecond) // Don't overwhelm IO
+			}
+		}
+	}()
+
+	// Let them run for a short time
+	time.Sleep(50 * time.Millisecond)
+	close(stop)
+}

@@ -30,3 +30,38 @@ func TestTimeExpiry(t *testing.T) {
 		t.Error("expected validator to return true immediately after reset")
 	}
 }
+
+func TestTimeExpiry_Concurrent(t *testing.T) {
+	duration := 10 * time.Millisecond
+	isValid, reset := TimeExpiry(duration)
+
+	stop := make(chan struct{})
+
+	// Start goroutine validating constantly
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				isValid()
+			}
+		}
+	}()
+
+	// Start goroutine resetting constantly
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				reset()
+			}
+		}
+	}()
+
+	// Let them run for a short time
+	time.Sleep(50 * time.Millisecond)
+	close(stop)
+}
