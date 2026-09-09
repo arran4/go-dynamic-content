@@ -1,6 +1,7 @@
 package helpers
 
 import (
+	"sync"
 	"testing"
 	"time"
 )
@@ -35,33 +36,35 @@ func TestTimeExpiry_Concurrent(t *testing.T) {
 	duration := 10 * time.Millisecond
 	isValid, reset := TimeExpiry(duration)
 
-	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	startCh := make(chan struct{})
+	numWorkers := 10
+	iterations := 1000
 
-	// Start goroutine validating constantly
-	go func() {
-		for {
-			select {
-			case <-stop:
-				return
-			default:
+	// Start goroutines validating constantly
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-startCh
+			for j := 0; j < iterations; j++ {
 				isValid()
 			}
-		}
-	}()
+		}()
+	}
 
-	// Start goroutine resetting constantly
-	go func() {
-		for {
-			select {
-			case <-stop:
-				return
-			default:
+	// Start goroutines resetting constantly
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-startCh
+			for j := 0; j < iterations; j++ {
 				reset()
 			}
-		}
-	}()
+		}()
+	}
 
-	// Let them run for a short time
-	time.Sleep(50 * time.Millisecond)
-	close(stop)
+	close(startCh)
+	wg.Wait()
 }

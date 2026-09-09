@@ -3,6 +3,7 @@ package helpers
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -63,47 +64,48 @@ func TestFileModified_Concurrent(t *testing.T) {
 
 	isValid, reset := FileModified(tempFile)
 
-	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	startCh := make(chan struct{})
+	numWorkers := 10
+	iterations := 100
 
-	// Start goroutine validating constantly
-	go func() {
-		for {
-			select {
-			case <-stop:
-				return
-			default:
+	// Start goroutines validating constantly
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-startCh
+			for j := 0; j < iterations; j++ {
 				isValid()
 			}
-		}
-	}()
+		}()
+	}
 
-	// Start goroutine resetting constantly
-	go func() {
-		for {
-			select {
-			case <-stop:
-				return
-			default:
+	// Start goroutines resetting constantly
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-startCh
+			for j := 0; j < iterations; j++ {
 				reset()
 			}
-		}
-	}()
+		}()
+	}
 
-	// Start goroutine modifying file constantly
-	go func() {
-		for {
-			select {
-			case <-stop:
-				return
-			default:
+	// Start goroutines modifying file constantly
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-startCh
+			for j := 0; j < iterations; j++ {
 				now := time.Now()
 				_ = os.Chtimes(tempFile, now, now)
-				time.Sleep(1 * time.Millisecond) // Don't overwhelm IO
 			}
-		}
-	}()
+		}()
+	}
 
-	// Let them run for a short time
-	time.Sleep(50 * time.Millisecond)
-	close(stop)
+	close(startCh)
+	wg.Wait()
 }
