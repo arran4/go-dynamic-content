@@ -126,13 +126,15 @@ The `Content` interface represents the core of the library, providing methods to
 
 The `NewContent[T any](opts ...Option[T])` constructor accepts the following options:
 
+> **Note on Option Ordering:** Storage options (`UseWeakStorage` and `UseMemoryStorage`) preserve existing content. If multiple storage options are provided, the last one provided wins. `WithValue` will have its value retained regardless of whether it appears before or after storage configuration options.
+
 - **`UseWeakStorage[T](bool)`:** Uses a weak pointer (Go 1.24 `weak` package) for storage. The garbage collector may reclaim the cached data if it's not strongly referenced elsewhere.
 - **`UseMemoryStorage[T](bool)`:** Uses a strong reference for storage, keeping the object in memory until explicitly cleared (this is the default behavior).
 - **`UseLazyLoading[T](bool)`:** Delays the execution of the generator function until `Data()` or `String()` is first called (this is the default behavior).
 - **`UseEagerLoading[T](bool)`:** Immediately executes the generator function during the `NewContent` call.
 - **`WithGenerator[T](func() (*T, error))`:** The function that supplies the content when needed.
 - **`WithValidator[T](func() bool)`:** Sets a function that determines whether the currently cached content is still valid.
-- **`WithValue[T](T)`:** Directly sets the content cache with the provided static value.
+- **`WithValue[T](T)`:** Directly sets the content cache with the provided static value. Note that when used in combination with `UseWeakStorage`, the initial value only retains a weak reference internally and will legitimately become eligible for garbage collection unless a strong reference is maintained elsewhere.
 - **`WithOnGenerate[T](func(val *T, err error))`:** A callback executed immediately after a generation attempt.
 - **`WithOnInvalidate[T](func())`:** A callback executed when content is cleared from the store due to invalidation.
 - **`WithOnClose[T](func())`:** A callback executed when `Close()` is called.

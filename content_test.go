@@ -2,6 +2,7 @@ package utils
 
 import (
 	"errors"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -99,6 +100,91 @@ func TestContent_EagerMemory(t *testing.T) {
 		return &b, nil
 	}), UseMemoryStorage[[]byte](true), UseEagerLoading[[]byte](true))
 	testContentImpl(t, fc, &generateCalls)
+}
+
+func TestContent_StorageOptionOrdering_Memory(t *testing.T) {
+	// WithValue before UseMemoryStorage
+	fc1 := NewContent[string](
+		WithValue[string]("hello 1"),
+		UseMemoryStorage[string](true),
+	)
+	if fc1.String() != "hello 1" {
+		t.Errorf("expected 'hello 1', got '%s'", fc1.String())
+	}
+
+	// UseMemoryStorage before WithValue
+	fc2 := NewContent[string](
+		UseMemoryStorage[string](true),
+		WithValue[string]("hello 2"),
+	)
+	if fc2.String() != "hello 2" {
+		t.Errorf("expected 'hello 2', got '%s'", fc2.String())
+	}
+}
+
+func TestContent_StorageOptionOrdering_Conflicting(t *testing.T) {
+	// Weak then Memory -> should retain value and become Memory
+	fc1 := NewContent[string](
+		WithValue[string]("hello conflict 1"),
+		UseWeakStorage[string](true),
+		// Force GC during intermediate state
+		func(fc *contentImpl[string]) {
+			runtime.GC()
+		},
+		UseMemoryStorage[string](true),
+	)
+	if fc1.String() != "hello conflict 1" {
+		t.Errorf("expected 'hello conflict 1', got '%s'", fc1.String())
+	}
+	// Verify it's memory store and survives GC
+	runtime.GC()
+	if fc1.String() != "hello conflict 1" {
+		t.Errorf("expected value to survive GC in MemoryStore, got '%s'", fc1.String())
+	}
+
+	// Memory then Weak -> should retain value temporarily (until GC)
+	fc2 := NewContent[string](
+		WithValue[string]("hello conflict 2"),
+		UseMemoryStorage[string](true),
+		UseWeakStorage[string](true),
+	)
+	if fc2.String() != "hello conflict 2" {
+		t.Errorf("expected 'hello conflict 2' initially, got '%s'", fc2.String())
+	}
+}
+
+func TestContent_StorageOptionOrdering_Weak(t *testing.T) {
+	// WithValue then WeakStorage -> should retain value initially, but allow GC
+	fc := NewContent[string](
+		WithValue[string]("hello weak"),
+		UseWeakStorage[string](true),
+	)
+
+	if fc.String() != "hello weak" {
+		t.Errorf("expected 'hello weak' initially, got '%s'", fc.String())
+	}
+
+	// Since no strong references to the string should exist, GC should collect it
+	runtime.GC()
+	if fc.String() != "" {
+		t.Errorf("expected value to be GC'd under weak storage, got '%s'", fc.String())
+	}
+
+	// WeakStorage then WithValue -> should retain value initially, but allow GC
+	fc2 := NewContent[string](
+		UseWeakStorage[string](true),
+		WithValue[string]("hello weak 2"),
+	)
+
+	if fc2.String() != "hello weak 2" {
+		t.Errorf("expected 'hello weak 2' initially, got '%s'", fc2.String())
+	}
+
+	// Since no strong references to the string should exist, GC should collect it
+	runtime.GC()
+	if fc2.String() != "" {
+		t.Errorf("expected value to be GC'd under weak storage, got '%s'", fc2.String())
+	}
 }
 
 func TestContent_WithOptions(t *testing.T) {

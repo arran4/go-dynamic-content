@@ -86,12 +86,26 @@ func (s *MemoryStore[T]) Clear() {
 	s.val = nil
 }
 
+type configStore[T any] struct {
+	val    *T
+	isWeak bool
+}
+
+func (s *configStore[T]) Get() *T    { return s.val }
+func (s *configStore[T]) Set(val *T) { s.val = val }
+func (s *configStore[T]) Clear()     { s.val = nil }
+
 type Option[T any] func(*contentImpl[T])
 
 func UseWeakStorage[T any](use bool) Option[T] {
 	return func(fc *contentImpl[T]) {
 		if use {
-			fc.store = &WeakStore[T]{}
+			if cs, ok := fc.store.(*configStore[T]); ok {
+				cs.isWeak = true
+			} else {
+				val := fc.store.Get()
+				fc.store = &configStore[T]{val: val, isWeak: true}
+			}
 		}
 	}
 }
@@ -99,7 +113,12 @@ func UseWeakStorage[T any](use bool) Option[T] {
 func UseMemoryStorage[T any](use bool) Option[T] {
 	return func(fc *contentImpl[T]) {
 		if use {
-			fc.store = &MemoryStore[T]{}
+			if cs, ok := fc.store.(*configStore[T]); ok {
+				cs.isWeak = false
+			} else {
+				val := fc.store.Get()
+				fc.store = &configStore[T]{val: val, isWeak: false}
+			}
 		}
 	}
 }
@@ -303,12 +322,24 @@ func wrapValidator[T any](origIsVal func() bool) func() bool {
 
 func NewContent[T any](opts ...Option[T]) Content[T] {
 	fc := &contentImpl[T]{
-		store: &MemoryStore[T]{},
+		store: &configStore[T]{isWeak: false},
 		lazy:  true,
 	}
 
 	for _, opt := range opts {
 		opt(fc)
+	}
+
+	if cs, ok := fc.store.(*configStore[T]); ok {
+		val := cs.Get()
+		if cs.isWeak {
+			fc.store = &WeakStore[T]{}
+		} else {
+			fc.store = &MemoryStore[T]{}
+		}
+		if val != nil {
+			fc.store.Set(val)
+		}
 	}
 
 	vStore := &versionedStore[T]{
