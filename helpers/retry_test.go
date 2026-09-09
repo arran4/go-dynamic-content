@@ -94,4 +94,75 @@ func TestRetryGenerator(t *testing.T) {
 			t.Errorf("expected at least %v delay, got %v", delay, elapsed)
 		}
 	})
+
+	t.Run("zero retries", func(t *testing.T) {
+		attempts := 0
+		gen := func() (*string, error) {
+			attempts++
+			return nil, errors.New("failed")
+		}
+
+		retryGen := RetryGenerator(0, 0, gen)
+		_, err := retryGen()
+		if err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if attempts != 1 {
+			t.Errorf("expected 1 attempt, got %d", attempts)
+		}
+	})
+
+	t.Run("negative retries normalized to zero", func(t *testing.T) {
+		attempts := 0
+		gen := func() (*string, error) {
+			attempts++
+			return nil, errors.New("failed")
+		}
+
+		retryGen := RetryGenerator(-5, 0, gen)
+		_, err := retryGen()
+		if err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if attempts != 1 {
+			t.Errorf("expected 1 attempt, got %d", attempts)
+		}
+	})
+
+	t.Run("negative delay normalized to zero", func(t *testing.T) {
+		attempts := 0
+		gen := func() (*string, error) {
+			attempts++
+			return nil, errors.New("failed")
+		}
+
+		retryGen := RetryGenerator(1, -10*time.Second, gen)
+		start := time.Now()
+		_, err := retryGen()
+		elapsed := time.Since(start)
+
+		if err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if attempts != 2 {
+			t.Errorf("expected 2 attempts, got %d", attempts)
+		}
+		if elapsed > 1*time.Second {
+			t.Errorf("expected fast failure, but got elapsed time %v", elapsed)
+		}
+	})
+
+	t.Run("nil generator", func(t *testing.T) {
+		retryGen := RetryGenerator[string](3, 0, nil)
+		res, err := retryGen()
+		if err == nil {
+			t.Fatal("expected error for nil generator, got none")
+		}
+		if err.Error() != "RetryGenerator: nil generator provided" {
+			t.Errorf("unexpected error message: %v", err)
+		}
+		if res != nil {
+			t.Errorf("expected nil result, got %v", res)
+		}
+	})
 }

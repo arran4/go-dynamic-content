@@ -3,6 +3,7 @@ package helpers
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
@@ -50,4 +51,61 @@ func TestFileModified(t *testing.T) {
 	if isValid() {
 		t.Error("expected validator to return false after file is deleted")
 	}
+}
+
+func TestFileModified_Concurrent(t *testing.T) {
+	tempDir := t.TempDir()
+	tempFile := filepath.Join(tempDir, "test_concurrent.txt")
+
+	err := os.WriteFile(tempFile, []byte("initial"), 0644)
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+
+	isValid, reset := FileModified(tempFile)
+
+	var wg sync.WaitGroup
+	startCh := make(chan struct{})
+	numWorkers := 10
+	iterations := 100
+
+	// Start goroutines validating constantly
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-startCh
+			for j := 0; j < iterations; j++ {
+				isValid()
+			}
+		}()
+	}
+
+	// Start goroutines resetting constantly
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-startCh
+			for j := 0; j < iterations; j++ {
+				reset()
+			}
+		}()
+	}
+
+	// Start goroutines modifying file constantly
+	for i := 0; i < numWorkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-startCh
+			for j := 0; j < iterations; j++ {
+				now := time.Now()
+				_ = os.Chtimes(tempFile, now, now)
+			}
+		}()
+	}
+
+	close(startCh)
+	wg.Wait()
 }
