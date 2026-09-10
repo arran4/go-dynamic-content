@@ -35,23 +35,24 @@ import (
 
 func main() {
 	// Create a new Content instance that lazily loads, and stores via weak references.
-	fc := utils.NewContent[[]byte](
-		utils.WithGenerator[[]byte](func() (*[]byte, error) {
+	fc := utils.NewContent[string](
+		utils.WithGenerator(func() (*string, error) {
 			// This will be called on the first Data() call
-			b := []byte("Hello from go-weak-content!")
-			return &b, nil
+			val := "Hello from go-weak-content!"
+			return &val, nil
 		}),
-		utils.UseWeakStorage[[]byte](true),
-		utils.UseLazyLoading[[]byte](true),
+		utils.UseWeakStorage[string](true),
+		utils.UseLazyLoading[string](true),
 	)
 
 	// Generate and retrieve data
 	data, err := fc.Data()
 	if err != nil {
-		panic(err)
+		fmt.Printf("Error: %v\n", err)
+		return
 	}
 
-	fmt.Println(string(*data))
+	fmt.Println(*data)
 }
 ```
 
@@ -69,11 +70,12 @@ import (
 )
 
 func main() {
+	// Create a new Content instance that eagerly loads, and stores via memory references.
 	fc := utils.NewContent[string](
-		utils.WithGenerator[string](func() (*string, error) {
+		utils.WithGenerator(func() (*string, error) {
 			// Executed immediately
-			str := "Eagerly loaded data!"
-			return &str, nil
+			val := "Eagerly loaded data!"
+			return &val, nil
 		}),
 		utils.UseMemoryStorage[string](true),
 		utils.UseEagerLoading[string](true),
