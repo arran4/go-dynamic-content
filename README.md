@@ -144,3 +144,41 @@ The `NewContent[T any](opts ...Option[T])` constructor accepts the following opt
 ## License
 
 This project is licensed under the BSD 3-Clause License. See [LICENSE](LICENSE) for more details.
+
+## Actions Diagnostics
+
+If the CI/CD workflow stops creating runs for PRs or `main` pushes, future maintainers can follow this operational procedure:
+
+1. **Is the workflow registered?**
+   ```bash
+   gh workflow view ci.yml --repo arran4/go-dynamic-content
+   ```
+2. **Is its state active? (Detecting disabled_inactivity)**
+   GitHub disables workflows after 60 days of inactivity. If disabled, PR and push events are ignored silently.
+   Check the state:
+   ```bash
+   gh api repos/arran4/go-dynamic-content/actions/workflows/257208205 | jq '.state'
+   ```
+   If it returns `"disabled_inactivity"`, it needs to be explicitly enabled.
+
+3. **Can `workflow_dispatch` create a run?**
+   Running a manual dispatch tests functionality and re-enables a workflow disabled by inactivity:
+   ```bash
+   gh workflow run ci.yml --repo arran4/go-dynamic-content --ref main -f mode=build
+   ```
+
+4. **Can a PR create a run? / Can a push to main create a run?**
+   Perform a safe commit (like adding this documentation) to a branch, push it, and create a PR. If it runs, the PR trigger is functional. After merging, verify a main push run is created.
+
+5. **How do I distinguish an absent run from a failed run?**
+   ```bash
+   gh run list --repo arran4/go-dynamic-content --workflow ci.yml --limit 10
+   ```
+   If a PR or push was made but no new run appears here, the run is **absent** (event dropped or workflow disabled). If it appears with a status of `failed`, it is a **failed run**.
+
+6. **Which GitHub settings should be checked when no run is created?**
+   Check for Actions policy restrictions:
+   ```bash
+   gh api repos/arran4/go-dynamic-content/actions/permissions
+   ```
+   Also check repository settings > Actions > General to ensure "Allow all actions and reusable workflows" is checked, and workflow run permissions are appropriately set without being overly broad.
