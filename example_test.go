@@ -10,6 +10,9 @@ import (
 
 // Example demonstrates the simplest sensible use of the library.
 //
+// The package provides a thread-safe content/cache abstraction with
+// configurable generation, storage, validation, and lifecycle hooks.
+//
 // - NewContent is the entry point.
 // - WithValue is used for content already available.
 // - WithGenerator is used for content obtained later.
@@ -274,6 +277,43 @@ func ExampleWithValue() {
 	// initial seeded data
 }
 
+// ExampleWithValue_weakStorage demonstrates seeding initial content while
+// explicitly configuring weak storage as the final policy. The seeded value
+// is available, but does not imply strong lifetime once construction completes.
+func ExampleWithValue_weakStorage() {
+	fc := utils.NewContent(
+		utils.WithValue("initial seeded data"),
+		utils.UseWeakStorage[string](true),
+	)
+
+	fmt.Println(fc.String())
+
+	// Output:
+	// initial seeded data
+}
+
+// ExampleUseWeakStorage_composition demonstrates the last-wins storage policy.
+// If contradictory policies like UseWeakStorage and UseMemoryStorage are supplied,
+// the last enabled storage option wins.
+func ExampleUseWeakStorage_composition() {
+	fc := utils.NewContent[string](
+		utils.WithGenerator(func() (*string, error) {
+			val := "generated data"
+			return &val, nil
+		}),
+		// Weak storage is enabled first
+		utils.UseWeakStorage[string](true),
+		// Memory storage is enabled later, so it wins
+		utils.UseMemoryStorage[string](true),
+	)
+
+	data, _ := fc.Data()
+	fmt.Println(*data)
+
+	// Output:
+	// generated data
+}
+
 // ExampleWithGenerator demonstrates the real contract: func() (*T, error).
 // Results are cached. Generation may happen again after invalidation,
 // weak collection, errors, or close according to configuration.
@@ -342,11 +382,51 @@ func ExampleUseEagerLoading() {
 	// After construction, generated: true
 }
 
+// Example_lazyVsEager compares lazy vs eager generation timing.
+// The last enabled loading policy wins when both are supplied, though normal code
+// should clearly recommend one policy.
+func Example_lazyVsEager() {
+	lazyGenerated := false
+	fcLazy := utils.NewContent[string](
+		utils.WithGenerator(func() (*string, error) {
+			lazyGenerated = true
+			val := "lazy"
+			return &val, nil
+		}),
+		utils.UseLazyLoading[string](true),
+	)
+
+	eagerGenerated := false
+	fcEager := utils.NewContent[string](
+		utils.WithGenerator(func() (*string, error) {
+			eagerGenerated = true
+			val := "eager"
+			return &val, nil
+		}),
+		utils.UseEagerLoading[string](true),
+	)
+
+	fmt.Println("After construction, lazy generated:", lazyGenerated)
+	fmt.Println("After construction, eager generated:", eagerGenerated)
+
+	_, _ = fcLazy.Data()
+	_, _ = fcEager.Data()
+
+	fmt.Println("After access, lazy generated:", lazyGenerated)
+
+	// Output:
+	// After construction, lazy generated: false
+	// After construction, eager generated: true
+	// After access, lazy generated: true
+}
+
 // ExampleWithValidator demonstrates validation.
 // Validity is checked when content state is accessed.
 // Invalid content is cleared/regenerated on Data(). Error() can report ErrInvalidContent.
 // Validation differs from explicit invalidation. Validators should be cheap,
 // deterministic, non-destructive, and safe to call repeatedly.
+// For time/filesystem/external-state validity, point to the helpers package
+// (e.g. helpers.NewTimeExpiryValidator) rather than writing repeated ad-hoc validators.
 func ExampleWithValidator() {
 	isValid := true
 	fc := utils.NewContent[string](
@@ -372,7 +452,8 @@ func ExampleWithValidator() {
 
 // ExampleWithOnGenerate demonstrates observing generation outcomes.
 // Recommended for things like metrics, logging, notification/integration.
-// Discouraged as the sole basis of correctness.
+// Discouraged as the sole basis of correctness. Callbacks can observe error/nil
+// outcomes and should avoid surprising re-entrant mutation.
 func ExampleWithOnGenerate() {
 	fc := utils.NewContent[string](
 		utils.WithGenerator(func() (*string, error) {
@@ -382,8 +463,10 @@ func ExampleWithOnGenerate() {
 		utils.WithOnGenerate[string](func(val *string, err error) {
 			if err != nil {
 				fmt.Println("Generated error:", err)
-			} else {
+			} else if val != nil {
 				fmt.Println("Generated value:", *val)
+			} else {
+				fmt.Println("Generated nil value with no error")
 			}
 		}),
 	)
