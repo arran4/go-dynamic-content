@@ -382,9 +382,43 @@ func ExampleUseEagerLoading() {
 }
 
 // Example_lazyVsEager compares lazy vs eager generation timing.
-// The last enabled loading policy wins when both are supplied, though normal code
-// should clearly choose one policy.
 func Example_lazyVsEager() {
+	lazyGenerated := false
+	fcLazy := utils.NewContent[string](
+		utils.WithGenerator(func() (*string, error) {
+			lazyGenerated = true
+			val := "lazy"
+			return &val, nil
+		}),
+		utils.UseLazyLoading[string](true),
+	)
+
+	eagerGenerated := false
+	_ = utils.NewContent[string](
+		utils.WithGenerator(func() (*string, error) {
+			eagerGenerated = true
+			val := "eager"
+			return &val, nil
+		}),
+		utils.UseEagerLoading[string](true),
+	)
+
+	fmt.Println("After construction, lazy generated:", lazyGenerated)
+	fmt.Println("After construction, eager generated:", eagerGenerated)
+
+	_, _ = fcLazy.Data()
+
+	fmt.Println("After access, lazy generated:", lazyGenerated)
+
+	// Output:
+	// After construction, lazy generated: false
+	// After construction, eager generated: true
+	// After access, lazy generated: true
+}
+
+// ExampleUseLazyLoading_composition demonstrates that the last enabled loading
+// policy wins when both are supplied. Normal code should clearly choose one policy.
+func ExampleUseLazyLoading_composition() {
 	compositionGenerated := false
 	fc := utils.NewContent[string](
 		utils.WithGenerator(func() (*string, error) {
