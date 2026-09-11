@@ -280,16 +280,15 @@ func ExampleWithValue() {
 // ExampleWithValue_weakStorage demonstrates seeding initial content while
 // explicitly configuring weak storage as the final policy. The seeded value
 // is available, but does not imply strong lifetime once construction completes.
+// If GC runs, the strongly seeded value may be reclaimed and the cache emptied.
 func ExampleWithValue_weakStorage() {
-	fc := utils.NewContent(
+	_ = utils.NewContent(
 		utils.WithValue("initial seeded data"),
 		utils.UseWeakStorage[string](true),
 	)
 
-	fmt.Println(fc.String())
-
-	// Output:
-	// initial seeded data
+	// Since the value is weakly held, its presence is not guaranteed here.
+	// We do not assert output to remain deterministic.
 }
 
 // ExampleUseWeakStorage_composition demonstrates the last-wins storage policy.
@@ -384,40 +383,29 @@ func ExampleUseEagerLoading() {
 
 // Example_lazyVsEager compares lazy vs eager generation timing.
 // The last enabled loading policy wins when both are supplied, though normal code
-// should clearly recommend one policy.
+// should clearly choose one policy.
 func Example_lazyVsEager() {
-	lazyGenerated := false
-	fcLazy := utils.NewContent[string](
+	compositionGenerated := false
+	fc := utils.NewContent[string](
 		utils.WithGenerator(func() (*string, error) {
-			lazyGenerated = true
-			val := "lazy"
-			return &val, nil
-		}),
-		utils.UseLazyLoading[string](true),
-	)
-
-	eagerGenerated := false
-	fcEager := utils.NewContent[string](
-		utils.WithGenerator(func() (*string, error) {
-			eagerGenerated = true
-			val := "eager"
+			compositionGenerated = true
+			val := "composition"
 			return &val, nil
 		}),
 		utils.UseEagerLoading[string](true),
+		// Lazy loading is enabled last, so it wins
+		utils.UseLazyLoading[string](true),
 	)
 
-	fmt.Println("After construction, lazy generated:", lazyGenerated)
-	fmt.Println("After construction, eager generated:", eagerGenerated)
+	fmt.Println("After construction, generated:", compositionGenerated)
 
-	_, _ = fcLazy.Data()
-	_, _ = fcEager.Data()
+	_, _ = fc.Data()
 
-	fmt.Println("After access, lazy generated:", lazyGenerated)
+	fmt.Println("After access, generated:", compositionGenerated)
 
 	// Output:
-	// After construction, lazy generated: false
-	// After construction, eager generated: true
-	// After access, lazy generated: true
+	// After construction, generated: false
+	// After access, generated: true
 }
 
 // ExampleWithValidator demonstrates validation.
@@ -426,7 +414,7 @@ func Example_lazyVsEager() {
 // Validation differs from explicit invalidation. Validators should be cheap,
 // deterministic, non-destructive, and safe to call repeatedly.
 // For time/filesystem/external-state validity, point to the helpers package
-// (e.g. helpers.NewTimeExpiryValidator) rather than writing repeated ad-hoc validators.
+// (e.g. helpers.TimeExpiry) rather than writing repeated ad-hoc validators.
 func ExampleWithValidator() {
 	isValid := true
 	fc := utils.NewContent[string](
