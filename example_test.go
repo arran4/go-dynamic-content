@@ -168,7 +168,7 @@ func Example_lifecycleRecipe() {
 // Example_errorHandlingRecipe teaches the distinction between different errors
 // and how to handle them.
 func Example_errorHandlingRecipe() {
-	var genErr error = errors.New("underlying network error")
+	genErr := errors.New("underlying network error")
 
 	// 1. ErrNoContent and generator errors
 	fc := utils.NewContent[string](
