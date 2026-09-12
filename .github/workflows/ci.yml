@@ -256,10 +256,23 @@ jobs:
     steps:
       - run: echo "All release quality gates passed."
 
+
+  smoke-git-tag-inc:
+    name: Smoke Test Installer
+    needs: [route]
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Test git-tag-inc Install
+        run: .github/scripts/install-git-tag-inc.sh
+
   prepare-release-tag:
     name: Prepare Release Tag
     needs: [route, release-ready]
-    if: ${{ needs.route.outputs.run_release == 'true' || github.event_name == 'pull_request' }}
+    if: ${{ needs.route.outputs.run_release == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -272,19 +285,8 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Install git-tag-inc
-        run: |
-          set -euo pipefail
-          VERSION="1.3.10"
-          ARCHIVE="git-tag-inc_${VERSION}_linux_amd64.tar.gz"
-          EXPECTED_SHA256="4fab8594ffff76ef99cb911baf0fe3126e4674a4fda2194d33d4f37993f82d9d"
-          curl -sSfL -o "$ARCHIVE" "https://github.com/arran4/git-tag-inc/releases/download/v${VERSION}/${ARCHIVE}"
-          echo "${EXPECTED_SHA256}  ${ARCHIVE}" | sha256sum -c -
-          tar -xzf "$ARCHIVE" git-tag-inc
-          sudo mv git-tag-inc /usr/local/bin/git-tag-inc
-          rm "$ARCHIVE"
-          git-tag-inc --version
+        run: .github/scripts/install-git-tag-inc.sh
       - name: Verify Exact Origin/Main
-        if: ${{ needs.route.outputs.run_release == 'true' }}
         env:
           GITHUB_REF_NAME: ${{ github.ref }}
           GITHUB_SHA: ${{ github.sha }}
@@ -301,7 +303,6 @@ jobs:
             sh -c "exit 1"
           fi
       - name: Calculate or explicitly set version
-        if: ${{ needs.route.outputs.run_release == 'true' }}
         env:
           RELEASE_MODE: ${{ inputs.mode }}
           RELEASE_VERSION_OVERRIDE: ${{ inputs.release_version_override }}
@@ -337,7 +338,6 @@ jobs:
           echo "Calculated TAG=$TAG"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
       - name: Tag and push (Idempotent)
-        if: ${{ needs.route.outputs.run_release == 'true' }}
         env:
           GITHUB_SHA: ${{ github.sha }}
         run: |
@@ -381,7 +381,6 @@ jobs:
              }
           fi
       - name: Dispatch Publisher
-        if: ${{ needs.route.outputs.run_release == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
