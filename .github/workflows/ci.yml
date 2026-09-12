@@ -272,9 +272,10 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Install git-tag-inc
-        uses: arran4/git-tag-inc-action@v1
-        with:
-          mode: install
+        run: |
+          set -euo pipefail
+          curl -sSfL "https://github.com/arran4/git-tag-inc/releases/download/v1.3.10/git-tag-inc-linux-amd64" -o /usr/local/bin/git-tag-inc
+          chmod +x /usr/local/bin/git-tag-inc
       - name: Verify Exact Origin/Main
         env:
           GITHUB_REF_NAME: ${{ github.ref }}
