@@ -259,7 +259,7 @@ jobs:
   prepare-release-tag:
     name: Prepare Release Tag
     needs: [route, release-ready]
-    if: ${{ needs.route.outputs.run_release == 'true' }}
+    if: ${{ needs.route.outputs.run_release == 'true' || github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -284,6 +284,7 @@ jobs:
           rm "$ARCHIVE"
           git-tag-inc --version
       - name: Verify Exact Origin/Main
+        if: ${{ needs.route.outputs.run_release == 'true' }}
         env:
           GITHUB_REF_NAME: ${{ github.ref }}
           GITHUB_SHA: ${{ github.sha }}
@@ -300,6 +301,7 @@ jobs:
             sh -c "exit 1"
           fi
       - name: Calculate or explicitly set version
+        if: ${{ needs.route.outputs.run_release == 'true' }}
         env:
           RELEASE_MODE: ${{ inputs.mode }}
           RELEASE_VERSION_OVERRIDE: ${{ inputs.release_version_override }}
@@ -335,6 +337,7 @@ jobs:
           echo "Calculated TAG=$TAG"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
       - name: Tag and push (Idempotent)
+        if: ${{ needs.route.outputs.run_release == 'true' }}
         env:
           GITHUB_SHA: ${{ github.sha }}
         run: |
@@ -378,6 +381,7 @@ jobs:
              }
           fi
       - name: Dispatch Publisher
+        if: ${{ needs.route.outputs.run_release == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
