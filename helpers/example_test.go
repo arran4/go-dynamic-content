@@ -38,7 +38,7 @@ func ExampleDynamicGenerator() {
 	fmt.Println("After SetGenerator, before Invalidate:", *data2)
 
 	// 6. Explicitly Invalidate() when the changed generator should take effect
-	fc.Invalidate()
+	_ = fc.Invalidate()
 
 	// 7. Show the next access using the new generator
 	data3, _ := fc.Data()
@@ -167,8 +167,8 @@ func ExampleFileModified() {
 	// Setup a temporary file
 	dir := os.TempDir()
 	filepath := filepath.Join(dir, "example_file_modified.txt")
-	os.WriteFile(filepath, []byte("v1"), 0644)
-	defer os.Remove(filepath)
+	_ = os.WriteFile(filepath, []byte("v1"), 0644)
+	defer func() { _ = os.Remove(filepath) }()
 
 	// Obtain the validator and reset closure
 	validator, reset := helpers.FileModified(filepath)
@@ -194,7 +194,7 @@ func ExampleFileModified() {
 
 	// Modify the file externally (wait briefly so file mod time is reliably updated on fast filesystems)
 	time.Sleep(10 * time.Millisecond)
-	os.WriteFile(filepath, []byte("v2"), 0644)
+	_ = os.WriteFile(filepath, []byte("v2"), 0644)
 
 	// Subsequent content access observes invalidity and regenerates
 	data2, _ := fc.Data()
@@ -212,8 +212,8 @@ func ExampleFileModified() {
 func Example_lazyFileCache() {
 	dir := os.TempDir()
 	path := filepath.Join(dir, "lazy_config.json")
-	os.WriteFile(path, []byte(`{"status": "ok"}`), 0644)
-	defer os.Remove(path)
+	_ = os.WriteFile(path, []byte(`{"status": "ok"}`), 0644)
+	defer func() { _ = os.Remove(path) }()
 
 	// Storage, generation, validation, and helper responsibility are visibly separate.
 	validator, reset := helpers.FileModified(path)
@@ -294,7 +294,7 @@ func Example_dynamicInvalidation() {
 	})
 
 	// Must invalidate explicitly so the cache fetches from the new generator
-	userCache.Invalidate()
+	_ = userCache.Invalidate()
 
 	newProfile, _ := userCache.Data()
 	fmt.Println("New Profile:", *newProfile)
