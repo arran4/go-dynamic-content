@@ -44,12 +44,16 @@ type Content[T any] interface {
 	Invalidate() error
 }
 
+// Store defines the storage abstraction used by the library. Users typically don't implement this directly unless extending the storage mechanism.
+// Ordinary users should use NewContent with configuration options rather than instantiating implementation-oriented storage types directly.
 type Store[T any] interface {
 	Get() *T
 	Set(*T)
 	Clear()
 }
 
+// WeakStore is an implementation of Store that utilizes weak references. It allows the garbage collector to reclaim the cached value if no other strong references exist.
+// Ordinary users should use NewContent with the UseWeakStorage option rather than instantiating this directly.
 type WeakStore[T any] struct {
 	ptr weak.Pointer[T]
 }
@@ -70,6 +74,8 @@ func (s *WeakStore[T]) Clear() {
 	s.ptr = weak.Pointer[T]{}
 }
 
+// MemoryStore is the default implementation of Store. It holds a strong reference to the cached value, keeping it in memory until explicitly cleared.
+// Ordinary users should use NewContent with the UseMemoryStorage option rather than instantiating this directly.
 type MemoryStore[T any] struct {
 	val *T
 }
