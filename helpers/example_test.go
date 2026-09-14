@@ -147,8 +147,10 @@ func ExampleRetryGenerator() {
 }
 
 func ExampleTimeExpiry() {
-	// Obtain the validator and reset closure
-	validator, reset := helpers.TimeExpiry(50 * time.Millisecond)
+	// Obtain the validator and reset closure.
+	// We use a long duration (e.g., 1 hour) to ensure the example output is strictly deterministic
+	// and immune to wall-clock scheduler pauses, per #33 requirements.
+	validator, reset := helpers.TimeExpiry(time.Hour)
 
 	// Pass the validator to WithValidator
 	fc := utils.NewContent[string](
