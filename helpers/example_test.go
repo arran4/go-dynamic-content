@@ -24,7 +24,11 @@ func ExampleDynamicGenerator() {
 	)
 
 	// 3. Populate and read the cache
-	data, _ := fc.Data()
+	data, err := fc.Data()
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
 	fmt.Println("First access:", *data)
 
 	// 4. Call SetGenerator to change the generation logic
@@ -33,15 +37,27 @@ func ExampleDynamicGenerator() {
 		return &val, nil
 	})
 
-	// 5. Show that changing the generator does not evict already-cached content
-	data2, _ := fc.Data()
+	// 5. Show that changing the generator does not evict already-cached content.
+	// DynamicGenerator is the supported way to vary generation behaviour rather than mutating Content.
+	data2, err := fc.Data()
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
 	fmt.Println("After SetGenerator, before Invalidate:", *data2)
 
 	// 6. Explicitly Invalidate() when the changed generator should take effect
-	_ = fc.Invalidate()
+	if err := fc.Invalidate(); err != nil {
+		fmt.Println("Invalidate error:", err)
+		return
+	}
 
 	// 7. Show the next access using the new generator
-	data3, _ := fc.Data()
+	data3, err := fc.Data()
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
 	fmt.Println("After Invalidate:", *data3)
 
 	// Output:
@@ -55,6 +71,7 @@ func ExampleFallbackGenerator() {
 
 	// A realistic primary/fallback composition.
 	// Generators are evaluated in priority order.
+	// Fallback ordering is policy, not incidental.
 	fallbackGen := helpers.FallbackGenerator[string](
 		func() (*string, error) {
 			// Primary source fails, so its error is hidden by a later successful source.
@@ -114,7 +131,7 @@ func ExampleRetryGenerator() {
 	)
 
 	// Retrying multiplies side effects and cost. It's appropriate for transient failures,
-	// but long blocking delays can be a poor fit for latency-sensitive paths.
+	// but long blocking delays can be a poor fit for latency-sensitive paths and eager generation.
 	fc := utils.NewContent[string](
 		utils.WithGenerator(retryGen), // It composes through WithGenerator
 	)
@@ -143,11 +160,16 @@ func ExampleTimeExpiry() {
 	)
 
 	// First access populates the cache
-	data, _ := fc.Data()
+	data, err := fc.Data()
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
 	fmt.Println("First access:", *data)
 
 	// Reset establishes a new validity window.
 	// Expiry acts as a cache-validity policy rather than a background scheduler.
+	// Demand-driven lifecycle plus current concurrent reset/validation guarantees apply.
 	reset()
 
 	// Since we just reset it, it is still valid
@@ -164,11 +186,22 @@ func ExampleTimeExpiry() {
 }
 
 func ExampleFileModified() {
-	// Setup a temporary file
-	dir := os.TempDir()
-	filepath := filepath.Join(dir, "example_file_modified.txt")
-	_ = os.WriteFile(filepath, []byte("v1"), 0644)
-	defer func() { _ = os.Remove(filepath) }()
+	// Setup a temporary file with explicitly controlled timestamps to ensure determinism.
+	dir, err := os.MkdirTemp("", "example_file_modified")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(dir)
+
+	filepath := filepath.Join(dir, "data.txt")
+	if err := os.WriteFile(filepath, []byte("v1"), 0644); err != nil {
+		panic(err)
+	}
+
+	t1 := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
+	if err := os.Chtimes(filepath, t1, t1); err != nil {
+		panic(err)
+	}
 
 	// Obtain the validator and reset closure
 	validator, reset := helpers.FileModified(filepath)
@@ -189,19 +222,33 @@ func ExampleFileModified() {
 		utils.WithValidator[string](validator),
 	)
 
-	data1, _ := fc.Data()
+	data1, err := fc.Data()
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
 	fmt.Println("First read:", *data1)
 
-	// Modify the file externally (wait briefly so file mod time is reliably updated on fast filesystems)
-	time.Sleep(10 * time.Millisecond)
-	_ = os.WriteFile(filepath, []byte("v2"), 0644)
+	// Modify the file externally and update its modification time
+	if err := os.WriteFile(filepath, []byte("v2"), 0644); err != nil {
+		panic(err)
+	}
+	t2 := t1.Add(1 * time.Second)
+	if err := os.Chtimes(filepath, t2, t2); err != nil {
+		panic(err)
+	}
 
-	// Subsequent content access observes invalidity and regenerates
-	data2, _ := fc.Data()
+	// Subsequent content access observes invalidity and regenerates.
+	// Filesystem metadata validation is demand-driven, not background watching.
+	// Concurrent reset/validation guarantees are provided by the helper.
+	data2, err := fc.Data()
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
 	fmt.Println("Second read (after external modification):", *data2)
 
 	// Note: missing/unstatable files cause the validator to report invalid.
-	// Filesystem metadata validation is demand-driven, not background watching.
 
 	// Output:
 	// First read: v1
@@ -210,10 +257,15 @@ func ExampleFileModified() {
 
 // Example_lazyFileCache demonstrates a lazy memory-backed file cache using FileModified.
 func Example_lazyFileCache() {
-	dir := os.TempDir()
+	dir, err := os.MkdirTemp("", "example_lazy_file_cache")
+	if err != nil {
+		panic(err)
+	}
+	defer os.RemoveAll(dir)
 	path := filepath.Join(dir, "lazy_config.json")
-	_ = os.WriteFile(path, []byte(`{"status": "ok"}`), 0644)
-	defer func() { _ = os.Remove(path) }()
+	if err := os.WriteFile(path, []byte(`{"status": "ok"}`), 0644); err != nil {
+		panic(err)
+	}
 
 	// Storage, generation, validation, and helper responsibility are visibly separate.
 	validator, reset := helpers.FileModified(path)
@@ -234,7 +286,11 @@ func Example_lazyFileCache() {
 		utils.UseLazyLoading[string](true),
 	)
 
-	data, _ := configCache.Data()
+	data, err := configCache.Data()
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
 	fmt.Println("Loaded config:", *data)
 
 	// Output:
@@ -264,7 +320,11 @@ func Example_fallbackRetry() {
 		utils.WithGenerator(combinedGen),
 	)
 
-	data, _ := cache.Data()
+	data, err := cache.Data()
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
 	fmt.Println("Loaded data:", *data)
 	fmt.Println("Primary attempts:", attempts)
 
@@ -284,7 +344,11 @@ func Example_dynamicInvalidation() {
 		utils.WithGenerator(dg.Generate),
 	)
 
-	profile, _ := userCache.Data()
+	profile, err := userCache.Data()
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
 	fmt.Println("Profile:", *profile)
 
 	// Switch to a new profile source dynamically
@@ -294,9 +358,16 @@ func Example_dynamicInvalidation() {
 	})
 
 	// Must invalidate explicitly so the cache fetches from the new generator
-	_ = userCache.Invalidate()
+	if err := userCache.Invalidate(); err != nil {
+		fmt.Println("Invalidate error:", err)
+		return
+	}
 
-	newProfile, _ := userCache.Data()
+	newProfile, err := userCache.Data()
+	if err != nil {
+		fmt.Println("Error:", err)
+		return
+	}
 	fmt.Println("New Profile:", *newProfile)
 
 	// Output:

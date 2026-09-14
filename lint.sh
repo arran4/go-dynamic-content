@@ -1,3 +1,0 @@
-#!/bin/bash
-export GOTOOLCHAIN=local
-/home/jules/go/bin/golangci-lint run ./...
