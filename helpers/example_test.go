@@ -191,7 +191,7 @@ func ExampleFileModified() {
 	if err != nil {
 		panic(err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 
 	filepath := filepath.Join(dir, "data.txt")
 	if err := os.WriteFile(filepath, []byte("v1"), 0644); err != nil {
@@ -261,7 +261,7 @@ func Example_lazyFileCache() {
 	if err != nil {
 		panic(err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 	path := filepath.Join(dir, "lazy_config.json")
 	if err := os.WriteFile(path, []byte(`{"status": "ok"}`), 0644); err != nil {
 		panic(err)
