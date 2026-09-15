@@ -269,6 +269,38 @@ jobs:
       - name: Test git-tag-inc Install
         run: .github/scripts/install-git-tag-inc.sh
 
+  smoke-release-guards:
+    name: Smoke Test Release Guards
+    needs: [route]
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Test Release Guard
+        run: |
+          set -euo pipefail
+          git fetch origin main --quiet
+          MAIN_SHA=$(git rev-parse origin/main)
+
+          # Test 1: refs/heads/main + correct SHA -> accepted
+          GITHUB_REF="refs/heads/main" GITHUB_SHA="$MAIN_SHA" .github/scripts/verify-origin-main.sh
+
+          # Test 2: refs/heads/other -> rejected
+          if GITHUB_REF="refs/heads/other" GITHUB_SHA="$MAIN_SHA" .github/scripts/verify-origin-main.sh; then
+             echo "Expected failure for branch refs/heads/other, but it passed"
+             exit 1
+          fi
+
+          # Test 3: refs/heads/main + wrong SHA -> rejected
+          if GITHUB_REF="refs/heads/main" GITHUB_SHA="0000000000000000000000000000000000000000" .github/scripts/verify-origin-main.sh; then
+             echo "Expected failure for wrong SHA, but it passed"
+             exit 1
+          fi
+
   prepare-release-tag:
     name: Prepare Release Tag
     needs: [route, release-ready]
@@ -288,20 +320,9 @@ jobs:
         run: .github/scripts/install-git-tag-inc.sh
       - name: Verify Exact Origin/Main
         env:
-          GITHUB_REF_NAME: ${{ github.ref }}
-          GITHUB_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          if [[ "$GITHUB_REF_NAME" != "refs/heads/main" ]]; then
-            echo "Error: Manual release preparation must run on refs/heads/main, got $GITHUB_REF_NAME"
-            sh -c "exit 1"
-          fi
-          git fetch origin main
-          MAIN_SHA=$(git rev-parse origin/main)
-          if [[ "$MAIN_SHA" != "$GITHUB_SHA" ]]; then
-            echo "Error: Requested release against $GITHUB_SHA but origin/main is at $MAIN_SHA"
-            sh -c "exit 1"
-          fi
+          TARGET_REF: ${{ github.ref }}
+          TARGET_SHA: ${{ github.sha }}
+        run: .github/scripts/verify-origin-main.sh
       - name: Calculate or explicitly set version
         env:
           RELEASE_MODE: ${{ inputs.mode }}
