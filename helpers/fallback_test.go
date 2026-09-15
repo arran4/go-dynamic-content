@@ -51,6 +51,60 @@ func TestFallbackGenerator(t *testing.T) {
 		}
 	})
 
+	t.Run("nil only generator", func(t *testing.T) {
+		fallbackGen := FallbackGenerator[string](nil)
+		_, err := fallbackGen()
+		if err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err.Error() != "FallbackGenerator: nil generator provided at index 0" {
+			t.Errorf("unexpected error message: %v", err)
+		}
+	})
+
+	t.Run("nil first generator", func(t *testing.T) {
+		invoked := false
+		gen := func() (*string, error) {
+			invoked = true
+			return &val1, nil
+		}
+		fallbackGen := FallbackGenerator(nil, gen)
+		_, err := fallbackGen()
+		if err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err.Error() != "FallbackGenerator: nil generator provided at index 0" {
+			t.Errorf("unexpected error message: %v", err)
+		}
+		if invoked {
+			t.Error("expected later generator to not be invoked")
+		}
+	})
+
+	t.Run("nil in middle", func(t *testing.T) {
+		invokedFirst := false
+		invokedLast := false
+		genFirst := func() (*string, error) {
+			invokedFirst = true
+			return nil, errors.New("failed")
+		}
+		genLast := func() (*string, error) {
+			invokedLast = true
+			return &val1, nil
+		}
+		fallbackGen := FallbackGenerator(genFirst, nil, genLast)
+		_, err := fallbackGen()
+		if err == nil {
+			t.Fatal("expected error, got none")
+		}
+		if err.Error() != "FallbackGenerator: nil generator provided at index 1" {
+			t.Errorf("unexpected error message: %v", err)
+		}
+		if invokedFirst || invokedLast {
+			t.Error("expected no generators to be invoked")
+		}
+	})
+
 	t.Run("no generators", func(t *testing.T) {
 		var noGens []func() (*string, error)
 		fallbackGen := FallbackGenerator(noGens...)
