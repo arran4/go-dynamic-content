@@ -14,7 +14,7 @@ go get github.com/arran4/go-weak-content
 
 - **Generics Support:** Caches any type (`Content[T any]`) effectively.
 - **Weak Pointers:** Leverage Go 1.24 `weak` pointers to automatically free cached memory when it is no longer referenced elsewhere.
-- **Thread-safe Loading:** Implemented safely for concurrent reads/writes using `sync.Mutex`.
+- **Thread-safe Loading:** Implemented safely for concurrent reads/writes using `sync.Mutex`. Generation and validation overlap is explicitly designed for a non-blocking stale-while-revalidate visibility model.
 - **Flexible Options:** Highly configurable using functional options.
 - **Lazy or Eager Loading:** Control when the content generation executes.
 
@@ -113,7 +113,16 @@ The `Content` interface represents the core of the library, providing methods to
 - **`String() string`**: A convenience method that returns the generated content as a string. Suppresses errors and returns an empty string if data generation fails. If the type is `string`, `[]byte`, or `fmt.Stringer`, it will natively format it.
 - **`Error() error`**: Evaluates whether the content state is currently valid. Returns `ErrInvalidContent` if a configured validator fails. If the cache is empty, it returns `ErrNoContent` (potentially wrapping a retained generator error).
 - **`HasContent() bool`**: Returns true if the underlying store currently holds a generated value.
-- **`Invalidate() error`**: Explicitly clears the cached content (and any retained generation error) from the underlying store and triggers the `onInvalidate` callback if set.
+- **`Invalidate() error`**: Explicitly clears the cached content (and any retained generation error) from the underlying store and triggers the `onInvalidate` callback if set. This serves as an observation barrier: any generation that was actively in-flight before the `Invalidate()` call will be rejected and will not become observable as a successful result to callers.
+
+### Concurrency Visibility Model
+
+The library guarantees thread-safety and defines specific behaviors for concurrent generation, validation, and invalidation:
+
+- **Non-Blocking Execution:** Generation and validation use a single-flight model but do not block concurrent overlapping callers.
+- **Stale-While-Validation:** If `isValid()` is actively evaluating, overlapping concurrent calls to `Data()` or `Error()` are permitted to see the pre-validation cached state and will optimistically treat it as valid without blocking.
+- **Stale-While-Generation:** If a generation is in flight, overlapping concurrent calls to `Data()` will immediately return the existing stale value (if available), or `ErrNoContent` if empty, without waiting for the new generation to complete.
+- **Callbacks Observe Accepted State:** Callbacks like `onGenerate` and `onInvalidate` represent accepted, committed cache state transitions. A stale generation result rejected due to a concurrent `Invalidate()` call will not invoke `onGenerate`.
 
 ### Sentinel Errors
 - **`ErrNoContent`**: Returned when the content cache is empty (e.g., generator not configured, returned nil, or an error occurred during generation).
