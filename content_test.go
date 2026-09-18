@@ -803,9 +803,10 @@ func TestContent_ValidationDeadlock_Concurrent(t *testing.T) {
 	// Caller A triggers validation
 	var wgA sync.WaitGroup
 	wgA.Add(1)
+	var errA error
 	go func() {
 		defer wgA.Done()
-		_ = fc.Error()
+		errA = fc.Error()
 	}()
 
 	// Wait for Caller A to enter the validator and block
@@ -857,14 +858,15 @@ func TestContent_ValidationDeadlock_Concurrent(t *testing.T) {
 	close(valWait)
 	WaitWgWithTimeout(t, &wgA)
 
-	// Next call to Error() should trigger re-evaluation (calls == 2), which returns true (valid).
-	// BUT wait, Invalidate() was implicitly triggered by the first validation returning false?
-	// The first validation was via fc.Error(). It evaluated to false.
-	// Error() doesn't call Invalidate() automatically, it just returns ErrInvalidContent.
-	// But it does leave the validator function having returned false for that specific call.
+	// Caller A should observe the false validation result
+	if !errors.Is(errA, ErrInvalidContent) {
+		t.Errorf("expected Caller A to receive ErrInvalidContent due to false validator return, got %v", errA)
+	}
+
+	// Next call to Error() should trigger re-evaluation (calls == 3), which returns true (valid).
 	errAfter := fc.Error()
-	if errAfter != nil { // Because calls == 2 returns true now
-		t.Errorf("expected Error() to evaluate true on second call, got %v", errAfter)
+	if errAfter != nil { // Because calls == 3 returns true now
+		t.Errorf("expected Error() to evaluate true on subsequent call, got %v", errAfter)
 	}
 }
 

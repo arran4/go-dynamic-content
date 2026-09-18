@@ -113,7 +113,7 @@ The `Content` interface represents the core of the library, providing methods to
 - **`String() string`**: A convenience method that returns the generated content as a string. Suppresses errors and returns an empty string if data generation fails. If the type is `string`, `[]byte`, or `fmt.Stringer`, it will natively format it.
 - **`Error() error`**: Evaluates whether the content state is currently valid. Returns `ErrInvalidContent` if a configured validator fails. If the cache is empty, it returns `ErrNoContent` (potentially wrapping a retained generator error).
 - **`HasContent() bool`**: Returns true if the underlying store currently holds a generated value.
-- **`Invalidate() error`**: Explicitly clears the cached content (and any retained generation error) from the underlying store and triggers the `onInvalidate` callback if set. This serves as an observation barrier: any generation that was actively in-flight before the `Invalidate()` call will be rejected and will not become observable as a successful result to callers.
+- **`Invalidate() error`**: Explicitly clears the cached content (and any retained generation error) from the underlying store and triggers the `onInvalidate` callback if set. This serves as an observation barrier: any generation that has not yet committed when the `Invalidate()` call advances the epoch will be rejected and will not become observable as a successful result to callers.
 
 ### Concurrency Visibility Model
 

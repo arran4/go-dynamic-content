@@ -50,8 +50,8 @@ type Content[T any] interface {
 	// from the underlying store, and triggers the onInvalidate callback.
 	//
 	// Concurrency:
-	// Invalidate acts as an observation barrier. Any generation that was actively in flight before the Invalidate
-	// call will be rejected when it completes, returning ErrNoContent to its caller and avoiding the onGenerate callback.
+	// Invalidate acts as an observation barrier. Any generation that has not yet committed when the Invalidate
+	// call advances the epoch will be rejected upon completion, returning ErrNoContent to its caller and avoiding the onGenerate callback.
 	Invalidate() error
 }
 
