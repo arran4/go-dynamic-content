@@ -114,45 +114,49 @@ func (s *configStore[T]) Clear()     { s.val = nil }
 
 type Option[T any] func(*contentImpl[T])
 
+// UseWeakStorage configures the content to use weak references for storage.
+// If true, the value may be garbage collected if no other strong references exist.
+// If false, selects memory storage. Later options override earlier ones.
 func UseWeakStorage[T any](use bool) Option[T] {
 	return func(fc *contentImpl[T]) {
-		if use {
-			if cs, ok := fc.store.(*configStore[T]); ok {
-				cs.isWeak = true
-			} else {
-				val := fc.store.Get()
-				fc.store = &configStore[T]{val: val, isWeak: true}
-			}
+		if cs, ok := fc.store.(*configStore[T]); ok {
+			cs.isWeak = use
+		} else {
+			val := fc.store.Get()
+			fc.store = &configStore[T]{val: val, isWeak: use}
 		}
 	}
 }
 
+// UseMemoryStorage configures the content to use a strong reference for storage.
+// If true, the value will be held in memory until explicitly cleared.
+// If false, selects weak storage. Later options override earlier ones.
 func UseMemoryStorage[T any](use bool) Option[T] {
 	return func(fc *contentImpl[T]) {
-		if use {
-			if cs, ok := fc.store.(*configStore[T]); ok {
-				cs.isWeak = false
-			} else {
-				val := fc.store.Get()
-				fc.store = &configStore[T]{val: val, isWeak: false}
-			}
+		if cs, ok := fc.store.(*configStore[T]); ok {
+			cs.isWeak = !use
+		} else {
+			val := fc.store.Get()
+			fc.store = &configStore[T]{val: val, isWeak: !use}
 		}
 	}
 }
 
+// UseLazyLoading configures the content to delay generation until first requested.
+// If true, selects lazy loading. If false, selects eager loading.
+// Later options override earlier ones.
 func UseLazyLoading[T any](use bool) Option[T] {
 	return func(fc *contentImpl[T]) {
-		if use {
-			fc.lazy = true
-		}
+		fc.lazy = use
 	}
 }
 
+// UseEagerLoading configures the content to generate immediately during initialization.
+// If true, selects eager loading. If false, selects lazy loading.
+// Later options override earlier ones.
 func UseEagerLoading[T any](use bool) Option[T] {
 	return func(fc *contentImpl[T]) {
-		if use {
-			fc.lazy = false
-		}
+		fc.lazy = !use
 	}
 }
 
