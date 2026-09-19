@@ -357,6 +357,7 @@ func TestContent_ValidatorFalseLivelock(t *testing.T) {
 func TestContent_InvalidationRacingGeneration(t *testing.T) {
 	var generateCalls int32
 	var invalidateCalls int32
+	var onGenerateCalls int32
 
 	genStarted := make(chan struct{})
 	genWait := make(chan struct{})
@@ -379,14 +380,24 @@ func TestContent_InvalidationRacingGeneration(t *testing.T) {
 		WithOnInvalidate[[]byte](func() {
 			atomic.AddInt32(&invalidateCalls, 1)
 		}),
+		WithOnGenerate[[]byte](func(val *[]byte, err error) {
+			atomic.AddInt32(&onGenerateCalls, 1)
+		}),
 	)
 
 	// Force a generation
 	var wg sync.WaitGroup
 	wg.Add(1)
+
+	// Use channels to capture the result of the first blocked Data() call
+	firstDataDone := make(chan struct{})
+	var firstDataErr error
+	var firstDataVal *[]byte
+
 	go func() {
 		defer wg.Done()
-		_, _ = fc.Data()
+		firstDataVal, firstDataErr = fc.Data()
+		close(firstDataDone)
 	}()
 
 	// Wait for generator to actually hold ownership
@@ -400,11 +411,24 @@ func TestContent_InvalidationRacingGeneration(t *testing.T) {
 
 	// Wait for generator to finish
 	WaitWgWithTimeout(t, &wg)
+	<-firstDataDone
 
 	// Given we invalidated during an active generation cycle, the epoch advanced.
 	// The generator's commit MUST have been rejected.
 	if fc.HasContent() {
 		t.Errorf("expected cache to be empty due to rejected stale commit, but got content")
+	}
+
+	if firstDataVal != nil {
+		t.Errorf("expected Data() caller to receive nil due to stale commit rejection, got %v", firstDataVal)
+	}
+
+	if !errors.Is(firstDataErr, ErrNoContent) {
+		t.Errorf("expected Data() caller to receive ErrNoContent due to stale commit rejection, got %v", firstDataErr)
+	}
+
+	if atomic.LoadInt32(&onGenerateCalls) != 0 {
+		t.Errorf("expected onGenerate NOT to be called for rejected result, but it was called %d times", atomic.LoadInt32(&onGenerateCalls))
 	}
 
 	// A new fetch should generate fresh content.
@@ -417,6 +441,9 @@ func TestContent_InvalidationRacingGeneration(t *testing.T) {
 	}
 	if atomic.LoadInt32(&generateCalls) != 2 {
 		t.Errorf("expected 2 generate calls, got %d", atomic.LoadInt32(&generateCalls))
+	}
+	if atomic.LoadInt32(&onGenerateCalls) != 1 {
+		t.Errorf("expected onGenerate to be called once for successful generation, got %d", atomic.LoadInt32(&onGenerateCalls))
 	}
 }
 
@@ -730,6 +757,116 @@ func TestContent_ReentrantGenerate(t *testing.T) {
 
 	if atomic.LoadInt32(&generateCalls) != 1 {
 		t.Errorf("expected 1 generate call, got %d", atomic.LoadInt32(&generateCalls))
+	}
+}
+
+func TestContent_ValidationDeadlock_Concurrent(t *testing.T) {
+	// Tests explicit stale-while-validation visibility for overlapping callers (#43)
+	// 1. cached content exists;
+	// 2. caller A enters validator and blocks;
+	// 3. caller B calls Data() and gets cached value (no blocking);
+	// 4. caller B calls Error() and gets optimistic validity;
+	// 5. caller A unblocks, returns false;
+	// 6. next call to Data()/Error() behaves correctly.
+
+	var generateCalls int32
+	var isValidCalls int32
+
+	valStarted := make(chan struct{})
+	valWait := make(chan struct{})
+	var valStartedOnce sync.Once
+
+	fc := NewContent[[]byte](
+		WithGenerator[[]byte](func() (*[]byte, error) {
+			atomic.AddInt32(&generateCalls, 1)
+			b := []byte("content")
+			return &b, nil
+		}),
+		WithValidator[[]byte](func() bool {
+			calls := atomic.AddInt32(&isValidCalls, 1)
+			if calls == 2 {
+				// Block only on the second evaluation (which we'll trigger explicitly)
+				valStartedOnce.Do(func() { close(valStarted) })
+				<-valWait
+				return false
+			}
+			return true
+		}),
+	)
+
+	// Populate cache first
+	_, _ = fc.Data()
+	if atomic.LoadInt32(&generateCalls) != 1 {
+		t.Fatalf("expected 1 generate call, got %d", atomic.LoadInt32(&generateCalls))
+	}
+
+	// Caller A triggers validation
+	var wgA sync.WaitGroup
+	wgA.Add(1)
+	var errA error
+	go func() {
+		defer wgA.Done()
+		errA = fc.Error()
+	}()
+
+	// Wait for Caller A to enter the validator and block
+	<-valStarted
+
+	// Caller B reads concurrent to in-flight validation
+	var wgB sync.WaitGroup
+	wgB.Add(1)
+
+	bDataDone := make(chan struct{})
+	bErrDone := make(chan struct{})
+	go func() {
+		defer wgB.Done()
+
+		// Caller B calling Error() overlapping validation observes optimistic validity
+		errB := fc.Error()
+		if errB != nil {
+			t.Errorf("expected Error() while validation is in-flight to return nil (optimistic), got %v", errB)
+		}
+		close(bErrDone)
+
+		// Caller B calls Data() while validation is in-flight
+		valB, dataErrB := fc.Data()
+		if dataErrB != nil {
+			t.Errorf("expected Data() while validation is in-flight to succeed, got %v", dataErrB)
+		}
+		if valB == nil || string(*valB) != "content" {
+			t.Errorf("expected Data() to return current cached value, got %v", valB)
+		}
+		close(bDataDone)
+	}()
+
+	// Ensure caller B actually completes without blocking on Caller A
+	select {
+	case <-bErrDone:
+	case <-time.After(1 * time.Second):
+		t.Fatalf("Caller B blocked calling Error() during active validation")
+	}
+
+	select {
+	case <-bDataDone:
+	case <-time.After(1 * time.Second):
+		t.Fatalf("Caller B blocked calling Data() during active validation")
+	}
+
+	WaitWgWithTimeout(t, &wgB)
+
+	// Unblock Caller A so validation completes and returns false
+	close(valWait)
+	WaitWgWithTimeout(t, &wgA)
+
+	// Caller A should observe the false validation result
+	if !errors.Is(errA, ErrInvalidContent) {
+		t.Errorf("expected Caller A to receive ErrInvalidContent due to false validator return, got %v", errA)
+	}
+
+	// Next call to Error() should trigger re-evaluation (calls == 3), which returns true (valid).
+	errAfter := fc.Error()
+	if errAfter != nil { // Because calls == 3 returns true now
+		t.Errorf("expected Error() to evaluate true on subsequent call, got %v", errAfter)
 	}
 }
 

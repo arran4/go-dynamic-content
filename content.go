@@ -22,6 +22,10 @@ type Content[T any] interface {
 	// for inspection via Error(), while later Data() calls will retry generation.
 	// A successful generation clears the retained error.
 	// A generator that successfully returns (nil, nil) will be coerced to return (nil, ErrNoContent).
+	//
+	// Concurrency:
+	// If a validation is actively in flight, concurrent callers will optimistically observe the current cached value without blocking.
+	// If a generation is actively in flight, concurrent callers will immediately return the currently cached value (if any), or ErrNoContent.
 	Data() (*T, error)
 
 	// Close clears the currently cached data from the underlying store and triggers the onClose callback.
@@ -34,6 +38,9 @@ type Content[T any] interface {
 	// Error evaluates the current state of the content cache.
 	// It returns ErrInvalidContent if a configured validator fails.
 	// If the cache is empty, it returns ErrNoContent (potentially wrapping a retained generator error).
+	//
+	// Concurrency:
+	// If a validation is actively in flight, concurrent callers will optimistically treat the state as valid without blocking.
 	Error() error
 
 	// HasContent returns true if the underlying store holds a generated value.
@@ -41,6 +48,10 @@ type Content[T any] interface {
 
 	// Invalidate explicitly clears the cached content (and any retained generation error)
 	// from the underlying store, and triggers the onInvalidate callback.
+	//
+	// Concurrency:
+	// Invalidate acts as an observation barrier. Any generation that has not yet committed when the Invalidate
+	// call advances the epoch will be rejected upon completion, returning ErrNoContent to its caller and avoiding the onGenerate callback.
 	Invalidate() error
 }
 
@@ -284,14 +295,18 @@ func wrapGenerator[T any](store *versionedStore[T], origGen func() (*T, error), 
 			genErr = ErrNoContent
 		}
 
+		var committed bool
 		if genErr != nil {
 			// Do not cache partial values if there is a generation error.
-			store.CommitIfCurrent(token, nil, genErr)
+			committed = store.CommitIfCurrent(token, nil, genErr)
 		} else {
-			store.CommitIfCurrent(token, genVal, nil)
+			committed = store.CommitIfCurrent(token, genVal, nil)
 		}
 
-		if onGen != nil {
+		if !committed {
+			genVal = nil
+			genErr = ErrNoContent
+		} else if onGen != nil {
 			onGen(genVal, genErr)
 		}
 
