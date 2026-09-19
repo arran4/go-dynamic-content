@@ -124,7 +124,6 @@ func TestContent_StorageOptionSemantics(t *testing.T) {
 			if str != "initial" {
 				t.Errorf("expected value to be preserved, got '%s'", str)
 			}
-			str = ""
 
 			runtime.GC()
 			survived := fc.String() != ""
@@ -179,7 +178,6 @@ func TestContent_StorageOptionSemantics_ValueOrdering(t *testing.T) {
 			if str != "value" {
 				t.Errorf("expected value to be preserved, got '%s'", str)
 			}
-			str = ""
 
 			runtime.GC()
 			survived := fc.String() != ""
