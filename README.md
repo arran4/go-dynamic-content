@@ -137,7 +137,7 @@ The library guarantees thread-safety and defines specific behaviors for concurre
 
 The `NewContent[T any](opts ...Option[T])` constructor accepts the following options:
 
-> **Note on Boolean Options and Ordering:** For storage options (`UseWeakStorage`, `UseMemoryStorage`) and loading options (`UseLazyLoading`, `UseEagerLoading`), the boolean argument is a strict policy selector, not just an enable flag. Passing `false` selects the opposite policy (e.g. `UseWeakStorage(false)` selects memory storage). Later options in the list completely overwrite earlier ones. Storage options preserve existing content (like `WithValue`).
+> **Note on Boolean Options and Ordering:** For storage options (`UseWeakStorage`, `UseMemoryStorage`) and loading options (`UseLazyLoading`, `UseEagerLoading`), the boolean argument is a strict policy selector, not just an enable flag. Passing `false` selects the opposite policy (e.g. `UseWeakStorage(false)` selects memory storage). Note: Before v1.0, passing `false` acted as a no-op; existing callers using `false` as 'leave defaults/previous choice unchanged' should omit the option instead, or deliberately choose their desired policy. Unchanged function signatures do not mean unchanged behaviour. Later options in the list completely overwrite earlier ones. Storage options preserve existing content (like `WithValue`).
 
 - **`UseWeakStorage[T](use bool)`:** If `true`, uses a weak pointer (Go 1.24 `weak` package) for storage. If `false`, selects memory storage.
 - **`UseMemoryStorage[T](use bool)`:** If `true`, uses a strong reference for storage, keeping the object in memory until explicitly cleared (the default). If `false`, selects weak storage.

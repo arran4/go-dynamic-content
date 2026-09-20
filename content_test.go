@@ -167,6 +167,18 @@ func TestContent_StorageOptionSemantics_ValueOrdering(t *testing.T) {
 		{"MemoryTrue_then_WeakFalse", func(v string) []Option[string] {
 			return []Option[string]{WithValue[string](v), UseMemoryStorage[string](true), UseWeakStorage[string](false)}
 		}, false},
+		{"Weak_then_WeakFalse", func(v string) []Option[string] {
+			return []Option[string]{WithValue[string](v), UseWeakStorage[string](true), UseWeakStorage[string](false)}
+		}, false},
+		{"WeakFalse_then_Weak", func(v string) []Option[string] {
+			return []Option[string]{WithValue[string](v), UseWeakStorage[string](false), UseWeakStorage[string](true)}
+		}, true},
+		{"Memory_then_MemoryFalse", func(v string) []Option[string] {
+			return []Option[string]{WithValue[string](v), UseMemoryStorage[string](true), UseMemoryStorage[string](false)}
+		}, true},
+		{"MemoryFalse_then_Memory", func(v string) []Option[string] {
+			return []Option[string]{WithValue[string](v), UseMemoryStorage[string](false), UseMemoryStorage[string](true)}
+		}, false},
 	}
 
 	for _, tt := range tests {
@@ -188,6 +200,34 @@ func TestContent_StorageOptionSemantics_ValueOrdering(t *testing.T) {
 				t.Errorf("expected value to survive GC under memory storage")
 			}
 		})
+	}
+}
+
+func TestContent_StorageOptionIntermediateGC(t *testing.T) {
+	// WithValue -> Weak -> GC -> Strong
+	// This ensures that the migration logic correctly retains values even if a weak pointer
+	// might become eligible for collection in the middle of option processing.
+	val := string([]byte{'s', 'u', 'r', 'v', 'i', 'v', 'o', 'r'})
+
+	fc := NewContent[string](
+		WithValue[string](val),
+		UseWeakStorage[string](true),
+		func(fc *contentImpl[string]) {
+			// Clear local strong reference to force GC reliance on the intermediate weak/config state
+			val = ""
+			runtime.GC()
+		},
+		UseMemoryStorage[string](true),
+	)
+
+	if fc.String() != "survivor" {
+		t.Errorf("Expected intermediate value to survive GC into strong storage, got '%s'", fc.String())
+	}
+
+	// Ensure it is truly strong storage now
+	runtime.GC()
+	if fc.String() != "survivor" {
+		t.Errorf("Expected value to survive in strong storage, got '%s'", fc.String())
 	}
 }
 
@@ -213,6 +253,18 @@ func TestContent_LoadingOptionSemantics(t *testing.T) {
 		{"EagerTrue_then_LazyFalse", func() []Option[string] {
 			return []Option[string]{UseEagerLoading[string](true), UseLazyLoading[string](false)}
 		}, false},
+		{"Eager_then_EagerFalse", func() []Option[string] {
+			return []Option[string]{UseEagerLoading[string](true), UseEagerLoading[string](false)}
+		}, true},
+		{"EagerFalse_then_Eager", func() []Option[string] {
+			return []Option[string]{UseEagerLoading[string](false), UseEagerLoading[string](true)}
+		}, false},
+		{"Lazy_then_LazyFalse", func() []Option[string] {
+			return []Option[string]{UseLazyLoading[string](true), UseLazyLoading[string](false)}
+		}, false},
+		{"LazyFalse_then_Lazy", func() []Option[string] {
+			return []Option[string]{UseLazyLoading[string](false), UseLazyLoading[string](true)}
+		}, true},
 	}
 
 	for _, tt := range tests {
