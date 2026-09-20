@@ -137,12 +137,12 @@ The library guarantees thread-safety and defines specific behaviors for concurre
 
 The `NewContent[T any](opts ...Option[T])` constructor accepts the following options:
 
-> **Note on Option Ordering:** Storage options (`UseWeakStorage` and `UseMemoryStorage`) preserve existing content. If multiple storage options are provided, the last one provided wins. `WithValue` will have its value retained regardless of whether it appears before or after storage configuration options.
+> **Note on Boolean Options and Ordering:** For storage options (`UseWeakStorage`, `UseMemoryStorage`) and loading options (`UseLazyLoading`, `UseEagerLoading`), the boolean argument is a strict policy selector, not just an enable flag. Passing `false` selects the opposite policy (e.g. `UseWeakStorage(false)` selects memory storage). Note: Before v1.0, passing `false` acted as a no-op; existing callers using `false` as 'leave defaults/previous choice unchanged' should omit the option instead, or deliberately choose their desired policy. Unchanged function signatures do not mean unchanged behaviour. Later options in the list completely overwrite earlier ones. Storage options preserve existing content (like `WithValue`).
 
-- **`UseWeakStorage[T](bool)`:** Uses a weak pointer (Go 1.24 `weak` package) for storage. The garbage collector may reclaim the cached data if it's not strongly referenced elsewhere.
-- **`UseMemoryStorage[T](bool)`:** Uses a strong reference for storage, keeping the object in memory until explicitly cleared (this is the default behavior).
-- **`UseLazyLoading[T](bool)`:** Delays the execution of the generator function until `Data()` or `String()` is first called (this is the default behavior).
-- **`UseEagerLoading[T](bool)`:** Immediately executes the generator function during the `NewContent` call.
+- **`UseWeakStorage[T](use bool)`:** If `true`, uses a weak pointer (Go 1.24 `weak` package) for storage. If `false`, selects memory storage.
+- **`UseMemoryStorage[T](use bool)`:** If `true`, uses a strong reference for storage, keeping the object in memory until explicitly cleared (the default). If `false`, selects weak storage.
+- **`UseLazyLoading[T](use bool)`:** If `true`, delays the execution of the generator function until `Data()` or `String()` is first called (the default). If `false`, selects eager loading.
+- **`UseEagerLoading[T](use bool)`:** If `true`, immediately executes the generator function during the `NewContent` call. If `false`, selects lazy loading.
 - **`WithGenerator[T](func() (*T, error))`:** The function that supplies the content when needed.
 - **`WithValidator[T](func() bool)`:** Sets a function that determines whether the currently cached content is still valid.
 - **`WithValue[T](T)`:** Directly sets the content cache with the provided static value. Note that when used in combination with `UseWeakStorage`, the initial value only retains a weak reference internally and will legitimately become eligible for garbage collection unless a strong reference is maintained elsewhere.

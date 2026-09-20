@@ -102,91 +102,202 @@ func TestContent_EagerMemory(t *testing.T) {
 	testContentImpl(t, fc, &generateCalls)
 }
 
-func TestContent_StorageOptionOrdering_Memory(t *testing.T) {
-	// WithValue before UseMemoryStorage
-	fc1 := NewContent[string](
-		WithValue[string]("hello 1"),
-		UseMemoryStorage[string](true),
-	)
-	if fc1.String() != "hello 1" {
-		t.Errorf("expected 'hello 1', got '%s'", fc1.String())
+func TestContent_StorageOptionSemantics(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func() Option[string] // Using func allows dynamic string allocation for GC
+		expectWeak bool                  // false means memory storage
+	}{
+		{"UseWeakStorage_true", func() Option[string] { return UseWeakStorage[string](true) }, true},
+		{"UseWeakStorage_false", func() Option[string] { return UseWeakStorage[string](false) }, false},
+		{"UseMemoryStorage_true", func() Option[string] { return UseMemoryStorage[string](true) }, false},
+		{"UseMemoryStorage_false", func() Option[string] { return UseMemoryStorage[string](false) }, true},
 	}
 
-	// UseMemoryStorage before WithValue
-	fc2 := NewContent[string](
-		UseMemoryStorage[string](true),
-		WithValue[string]("hello 2"),
-	)
-	if fc2.String() != "hello 2" {
-		t.Errorf("expected 'hello 2', got '%s'", fc2.String())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			val := string([]byte{'i', 'n', 'i', 't', 'i', 'a', 'l'})
+			opts := []Option[string]{WithValue[string](val), tt.setup()}
+			fc := NewContent[string](opts...)
+
+			str := fc.String()
+			if str != "initial" {
+				t.Errorf("expected value to be preserved, got '%s'", str)
+			}
+
+			runtime.GC()
+			survived := fc.String() != ""
+
+			if tt.expectWeak && survived {
+				t.Errorf("expected value to be GC'd under weak storage")
+			} else if !tt.expectWeak && !survived {
+				t.Errorf("expected value to survive GC under memory storage")
+			}
+		})
 	}
 }
 
-func TestContent_StorageOptionOrdering_Conflicting(t *testing.T) {
-	// Weak then Memory -> should retain value and become Memory
-	fc1 := NewContent[string](
-		WithValue[string]("hello conflict 1"),
+func TestContent_StorageOptionSemantics_ValueOrdering(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func(val string) []Option[string]
+		expectWeak bool
+	}{
+		{"Value_then_WeakTrue", func(v string) []Option[string] {
+			return []Option[string]{WithValue[string](v), UseWeakStorage[string](true)}
+		}, true},
+		{"WeakTrue_then_Value", func(v string) []Option[string] {
+			return []Option[string]{UseWeakStorage[string](true), WithValue[string](v)}
+		}, true},
+		{"Value_then_WeakFalse", func(v string) []Option[string] {
+			return []Option[string]{WithValue[string](v), UseWeakStorage[string](false)}
+		}, false},
+		{"MemoryFalse_then_Value", func(v string) []Option[string] {
+			return []Option[string]{UseMemoryStorage[string](false), WithValue[string](v)}
+		}, true},
+		{"Weak_then_Memory", func(v string) []Option[string] {
+			return []Option[string]{WithValue[string](v), UseWeakStorage[string](true), UseMemoryStorage[string](true)}
+		}, false},
+		{"Memory_then_Weak", func(v string) []Option[string] {
+			return []Option[string]{WithValue[string](v), UseMemoryStorage[string](true), UseWeakStorage[string](true)}
+		}, true},
+		{"WeakTrue_then_MemoryFalse", func(v string) []Option[string] {
+			return []Option[string]{WithValue[string](v), UseWeakStorage[string](true), UseMemoryStorage[string](false)}
+		}, true},
+		{"MemoryTrue_then_WeakFalse", func(v string) []Option[string] {
+			return []Option[string]{WithValue[string](v), UseMemoryStorage[string](true), UseWeakStorage[string](false)}
+		}, false},
+		{"Weak_then_WeakFalse", func(v string) []Option[string] {
+			return []Option[string]{WithValue[string](v), UseWeakStorage[string](true), UseWeakStorage[string](false)}
+		}, false},
+		{"WeakFalse_then_Weak", func(v string) []Option[string] {
+			return []Option[string]{WithValue[string](v), UseWeakStorage[string](false), UseWeakStorage[string](true)}
+		}, true},
+		{"Memory_then_MemoryFalse", func(v string) []Option[string] {
+			return []Option[string]{WithValue[string](v), UseMemoryStorage[string](true), UseMemoryStorage[string](false)}
+		}, true},
+		{"MemoryFalse_then_Memory", func(v string) []Option[string] {
+			return []Option[string]{WithValue[string](v), UseMemoryStorage[string](false), UseMemoryStorage[string](true)}
+		}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			val := string([]byte{'v', 'a', 'l', 'u', 'e'})
+			fc := NewContent[string](tt.setup(val)...)
+
+			str := fc.String()
+			if str != "value" {
+				t.Errorf("expected value to be preserved, got '%s'", str)
+			}
+
+			runtime.GC()
+			survived := fc.String() != ""
+
+			if tt.expectWeak && survived {
+				t.Errorf("expected value to be GC'd under weak storage")
+			} else if !tt.expectWeak && !survived {
+				t.Errorf("expected value to survive GC under memory storage")
+			}
+		})
+	}
+}
+
+func TestContent_StorageOptionIntermediateGC(t *testing.T) {
+	// WithValue -> Weak -> GC -> Strong
+	// This ensures that the migration logic correctly retains values even if a weak pointer
+	// might become eligible for collection in the middle of option processing.
+	val := string([]byte{'s', 'u', 'r', 'v', 'i', 'v', 'o', 'r'})
+
+	fc := NewContent[string](
+		WithValue[string](val),
 		UseWeakStorage[string](true),
-		// Force GC during intermediate state
 		func(fc *contentImpl[string]) {
+			// Clear local strong reference to force GC reliance on the intermediate weak/config state
+			val = ""
 			runtime.GC()
 		},
 		UseMemoryStorage[string](true),
 	)
-	if fc1.String() != "hello conflict 1" {
-		t.Errorf("expected 'hello conflict 1', got '%s'", fc1.String())
-	}
-	// Verify it's memory store and survives GC
-	runtime.GC()
-	if fc1.String() != "hello conflict 1" {
-		t.Errorf("expected value to survive GC in MemoryStore, got '%s'", fc1.String())
+
+	if fc.String() != "survivor" {
+		t.Errorf("Expected intermediate value to survive GC into strong storage, got '%s'", fc.String())
 	}
 
-	// Memory then Weak -> should retain value temporarily (until GC)
-	fc2 := NewContent[string](
-		WithValue[string]("hello conflict 2"),
-		UseMemoryStorage[string](true),
-		UseWeakStorage[string](true),
-	)
-	if fc2.String() != "hello conflict 2" {
-		t.Errorf("expected 'hello conflict 2' initially, got '%s'", fc2.String())
+	// Ensure it is truly strong storage now
+	runtime.GC()
+	if fc.String() != "survivor" {
+		t.Errorf("Expected value to survive in strong storage, got '%s'", fc.String())
 	}
 }
 
-func TestContent_StorageOptionOrdering_Weak(t *testing.T) {
-	// WithValue then WeakStorage -> should retain value initially, but allow GC
-	fc := NewContent[string](
-		WithValue[string]("hello weak"),
-		UseWeakStorage[string](true),
-	)
-
-	if fc.String() != "hello weak" {
-		t.Errorf("expected 'hello weak' initially, got '%s'", fc.String())
+func TestContent_LoadingOptionSemantics(t *testing.T) {
+	tests := []struct {
+		name       string
+		setup      func() []Option[string]
+		expectLazy bool
+	}{
+		{"UseLazyLoading_true", func() []Option[string] { return []Option[string]{UseLazyLoading[string](true)} }, true},
+		{"UseLazyLoading_false", func() []Option[string] { return []Option[string]{UseLazyLoading[string](false)} }, false},
+		{"UseEagerLoading_true", func() []Option[string] { return []Option[string]{UseEagerLoading[string](true)} }, false},
+		{"UseEagerLoading_false", func() []Option[string] { return []Option[string]{UseEagerLoading[string](false)} }, true},
+		{"Lazy_then_Eager", func() []Option[string] {
+			return []Option[string]{UseLazyLoading[string](true), UseEagerLoading[string](true)}
+		}, false},
+		{"Eager_then_Lazy", func() []Option[string] {
+			return []Option[string]{UseEagerLoading[string](true), UseLazyLoading[string](true)}
+		}, true},
+		{"LazyTrue_then_EagerFalse", func() []Option[string] {
+			return []Option[string]{UseLazyLoading[string](true), UseEagerLoading[string](false)}
+		}, true},
+		{"EagerTrue_then_LazyFalse", func() []Option[string] {
+			return []Option[string]{UseEagerLoading[string](true), UseLazyLoading[string](false)}
+		}, false},
+		{"Eager_then_EagerFalse", func() []Option[string] {
+			return []Option[string]{UseEagerLoading[string](true), UseEagerLoading[string](false)}
+		}, true},
+		{"EagerFalse_then_Eager", func() []Option[string] {
+			return []Option[string]{UseEagerLoading[string](false), UseEagerLoading[string](true)}
+		}, false},
+		{"Lazy_then_LazyFalse", func() []Option[string] {
+			return []Option[string]{UseLazyLoading[string](true), UseLazyLoading[string](false)}
+		}, false},
+		{"LazyFalse_then_Lazy", func() []Option[string] {
+			return []Option[string]{UseLazyLoading[string](false), UseLazyLoading[string](true)}
+		}, true},
 	}
 
-	// Since no strong references to the string should exist, GC should collect it
-	runtime.GC()
-	if fc.String() != "" {
-		t.Errorf("expected value to be GC'd under weak storage, got '%s'", fc.String())
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			generated := false
+			genOpt := WithGenerator(func() (*string, error) {
+				generated = true
+				s := "gen"
+				return &s, nil
+			})
 
-	// WeakStorage then WithValue -> should retain value initially, but allow GC
-	fc2 := NewContent[string](
-		UseWeakStorage[string](true),
-		WithValue[string]("hello weak 2"),
-	)
+			opts := append([]Option[string]{genOpt}, tt.setup()...)
+			fc := NewContent[string](opts...)
 
-	if fc2.String() != "hello weak 2" {
-		t.Errorf("expected 'hello weak 2' initially, got '%s'", fc2.String())
-	}
+			if tt.expectLazy && generated {
+				t.Errorf("expected lazy loading, but generator was called immediately")
+			} else if !tt.expectLazy && !generated {
+				t.Errorf("expected eager loading, but generator was not called immediately")
+			}
 
-	// Since no strong references to the string should exist, GC should collect it
-	runtime.GC()
-	if fc2.String() != "" {
-		t.Errorf("expected value to be GC'd under weak storage, got '%s'", fc2.String())
+			// For eager, it should have content immediately
+			if !tt.expectLazy && !fc.HasContent() {
+				t.Errorf("expected eager loading to make content available immediately")
+			}
+
+			// Requesting data should always invoke it if it hasn't been yet
+			_, _ = fc.Data()
+			if !generated {
+				t.Errorf("generator was never called even after Data()")
+			}
+		})
 	}
 }
-
 func TestContent_WithOptions(t *testing.T) {
 
 	fc := NewContent[[]byte](WithValue[[]byte]([]byte("hello bytes")))
